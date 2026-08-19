@@ -27,7 +27,7 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
 try:
@@ -1236,13 +1236,32 @@ def assert_state_outside_backups() -> None:
             raise ManagerError("state root must be outside installation and configuration roots")
 
 
+def program_backup_filter(member: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    path = PurePosixPath(member.name)
+    if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+        return None
+    if path.name.startswith(".") and path.name.endswith((".tmp", ".new", ".download")):
+        return None
+    return member
+
+
 def backup_program(destination: Path) -> None:
     assert_state_outside_backups()
     with tarfile.open(destination, "w:gz") as bundle:
         if install_root().exists():
-            bundle.add(install_root(), arcname="opt/sub2api", recursive=True)
+            bundle.add(
+                install_root(),
+                arcname="opt/sub2api",
+                recursive=True,
+                filter=program_backup_filter,
+            )
         if config_root().exists():
-            bundle.add(config_root(), arcname="etc/sub2api", recursive=True)
+            bundle.add(
+                config_root(),
+                arcname="etc/sub2api",
+                recursive=True,
+                filter=program_backup_filter,
+            )
 
 
 def create_backup(
@@ -1253,14 +1272,11 @@ def create_backup(
     to_channel: str = "official",
 ) -> tuple[str, Path, dict[str, Any]]:
     backup_id = dt.datetime.now().strftime("%Y%m%dT%H%M%S%f") + f"-{from_channel}-{from_version}-to-{to_channel}-{to_version}"
-    directory = state_root() / "backups" / backup_id
-    directory.mkdir(parents=True, exist_ok=False)
     binary = binary_path()
     if not binary.is_file():
         raise ManagerError(f"installed binary does not exist: {binary}")
-    shutil.copy2(binary, directory / "sub2api")
-    backup_program(directory / "program.tar.gz")
-    dump_database(directory / "database.preflight.dump")
+    directory = state_root() / "backups" / backup_id
+    directory.mkdir(parents=True, exist_ok=False)
     metadata = {
         "backup_id": backup_id,
         "created_at": now_utc(),
@@ -1269,10 +1285,29 @@ def create_backup(
         "from_channel": from_channel,
         "to_version": to_version,
         "to_channel": to_channel,
-        "binary_sha256": sha256_file(directory / "sub2api"),
-        "status": "preflight",
+        "status": "creating",
+        "recoverable": False,
     }
     write_json_atomic(directory / "metadata.json", metadata)
+    try:
+        shutil.copy2(binary, directory / "sub2api")
+        backup_program(directory / "program.tar.gz")
+        dump_database(directory / "database.preflight.dump")
+        metadata["binary_sha256"] = sha256_file(directory / "sub2api")
+        metadata["status"] = "preflight"
+        write_json_atomic(directory / "metadata.json", metadata)
+    except Exception as exc:
+        metadata.update(
+            {
+                "status": "failed",
+                "failed_at": now_utc(),
+                "error": str(exc)[:1000],
+                "recoverable": False,
+            }
+        )
+        with contextlib.suppress(Exception):
+            write_json_atomic(directory / "metadata.json", metadata)
+        raise
     return backup_id, directory, metadata
 
 
@@ -1280,6 +1315,7 @@ def finalize_database_backup(directory: Path, metadata: dict[str, Any]) -> None:
     dump_database(directory / "database.dump")
     metadata["database_sha256"] = sha256_file(directory / "database.dump")
     metadata["status"] = "ready"
+    metadata["recoverable"] = True
     metadata["ready_at"] = now_utc()
     write_json_atomic(directory / "metadata.json", metadata)
 

@@ -305,6 +305,93 @@ class ManagerTests(unittest.TestCase):
                 manager.atomic_replace_binary(source)
             self.assertEqual(target.read_bytes(), b"new-binary")
 
+    def test_program_backup_excludes_only_cache_and_atomic_temporary_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            install = root / "install"
+            config = root / "config"
+            state = root / "state"
+            plugin = install / "plugins" / "weekly-overdraft"
+            cache = plugin / "__pycache__"
+            cache.mkdir(parents=True)
+            config.mkdir()
+            state.mkdir()
+            (install / "sub2api").write_bytes(b"binary")
+            (plugin / "manager.py").write_text("important", encoding="utf-8")
+            (plugin / "module.pyc").write_bytes(b"cache")
+            (cache / ".manager.py.3005eea.cpython-313.pyc").write_bytes(b"cache")
+            (install / ".sub2api.150909.new").write_bytes(b"partial")
+            (plugin / ".manager.py.deploy.tmp").write_bytes(b"partial")
+            (config / "manager.env").write_text("important=true\n", encoding="utf-8")
+            (config / ".manager.env.deploy.download").write_bytes(b"partial")
+            archive = state / "program.tar.gz"
+
+            with mock.patch.object(manager, "install_root", return_value=install), \
+                mock.patch.object(manager, "config_root", return_value=config), \
+                mock.patch.object(manager, "state_root", return_value=state):
+                manager.backup_program(archive)
+
+            with tarfile.open(archive, "r:gz") as bundle:
+                names = set(bundle.getnames())
+            self.assertIn("opt/sub2api/sub2api", names)
+            self.assertIn("opt/sub2api/plugins/weekly-overdraft/manager.py", names)
+            self.assertIn("etc/sub2api/manager.env", names)
+            self.assertFalse(any("__pycache__" in name for name in names))
+            self.assertFalse(any(name.endswith((".pyc", ".pyo")) for name in names))
+            self.assertNotIn("opt/sub2api/.sub2api.150909.new", names)
+            self.assertNotIn(
+                "opt/sub2api/plugins/weekly-overdraft/.manager.py.deploy.tmp",
+                names,
+            )
+            self.assertNotIn("etc/sub2api/.manager.env.deploy.download", names)
+
+    def test_program_backup_does_not_hide_important_permission_errors(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            install = root / "install"
+            config = root / "config"
+            state = root / "state"
+            install.mkdir()
+            config.mkdir()
+            state.mkdir()
+            bundle = mock.MagicMock()
+            bundle.__enter__.return_value = bundle
+            bundle.add.side_effect = PermissionError("important file is unreadable")
+
+            with mock.patch.object(manager, "install_root", return_value=install), \
+                mock.patch.object(manager, "config_root", return_value=config), \
+                mock.patch.object(manager, "state_root", return_value=state), \
+                mock.patch.object(manager.tarfile, "open", return_value=bundle):
+                with self.assertRaisesRegex(PermissionError, "important file is unreadable"):
+                    manager.backup_program(state / "program.tar.gz")
+
+            self.assertIs(bundle.add.call_args.kwargs["filter"], manager.program_backup_filter)
+
+    def test_create_backup_marks_partial_archive_as_failed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary) / "state"
+            binary = Path(temporary) / "sub2api"
+            binary.write_bytes(b"current-binary")
+
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": str(state)}), \
+                mock.patch.object(manager, "binary_path", return_value=binary), \
+                mock.patch.object(
+                    manager,
+                    "backup_program",
+                    side_effect=PermissionError("important file is unreadable"),
+                ), mock.patch.object(manager, "dump_database") as dump:
+                with self.assertRaisesRegex(PermissionError, "important file is unreadable"):
+                    manager.create_backup("0.1.178", "0.1.179")
+
+            dump.assert_not_called()
+            backup_directories = list((state / "backups").iterdir())
+            self.assertEqual(len(backup_directories), 1)
+            metadata = manager.read_json(backup_directories[0] / "metadata.json", {})
+            self.assertEqual(metadata["status"], "failed")
+            self.assertIs(metadata["recoverable"], False)
+            self.assertIn("important file is unreadable", metadata["error"])
+            self.assertTrue((backup_directories[0] / "sub2api").is_file())
+
     def test_choose_backup_requires_ready_database_pair(self):
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary)
