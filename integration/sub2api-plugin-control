@@ -5,10 +5,16 @@ MANAGER=/opt/sub2api/plugins/weekly-overdraft/manager.sh
 ENV_FILE=/etc/sub2api/weekly-overdraft-manager.env
 STATE_ROOT=/var/lib/sub2api-weekly-overdraft
 APPLY_UNIT=sub2api-overdraft-apply.service
+CONTROL_LOCK_WAIT_SECONDS=30
 
 if [[ "$EUID" -ne 0 ]]; then
   printf 'plugin control must run through sudo\n' >&2
   exit 1
+fi
+action="${1:-}"
+if [[ "$action" == "apply-worker-failed" && "${2:-}" == "success" ]]; then
+  [[ "$#" -eq 2 ]]
+  exit 0
 fi
 if [[ ! -x "$MANAGER" || ! -r "$ENV_FILE" ]]; then
   printf 'weekly-overdraft manager is not installed\n' >&2
@@ -24,9 +30,24 @@ export XDG_CACHE_HOME="$STATE_ROOT/cache"
 export PATH="/usr/local/bin:/usr/bin:/bin"
 install -d -o sub2api -g sub2api -m 0750 "$HOME" "$XDG_CACHE_HOME"
 cd "$STATE_ROOT"
+# Lock the directory inode itself so the privileged controller never follows a
+# lock-file symlink created by the service account.
+exec 9<"$STATE_ROOT"
 
 run_manager() {
   /usr/sbin/runuser --user sub2api --preserve-environment -- "$MANAGER" "$@"
+}
+
+acquire_control_lock() {
+  local timeout="${1:-$CONTROL_LOCK_WAIT_SECONDS}"
+  if ! flock --exclusive --timeout "$timeout" 9; then
+    printf 'another plugin control operation is running\n' >&2
+    return 1
+  fi
+}
+
+try_control_lock() {
+  flock --exclusive --nonblock 9
 }
 
 apply_unit_running() {
@@ -35,27 +56,52 @@ apply_unit_running() {
   [[ "$state" == "activating" || "$state" == "active" || "$state" == "reloading" || "$state" == "deactivating" ]]
 }
 
+restart_is_healthy() {
+  systemctl restart sub2api.service || return 1
+  systemctl is-active --quiet sub2api.service || return 1
+}
+
 restart_with_fallback() {
   local rollback_upgrade="${1:-no}"
-  if systemctl restart sub2api.service && systemctl is-active --quiet sub2api.service; then
+  if restart_is_healthy; then
     return
   fi
   # An upgrade start failure can happen before ExecStartPost stages rollback.
   if [[ "$rollback_upgrade" == "yes" ]]; then
     run_manager rollback previous --reason start_failure || true
   fi
-  if systemctl restart sub2api.service && systemctl is-active --quiet sub2api.service; then
+  if restart_is_healthy; then
     return
   fi
   journalctl -u sub2api.service -n 80 --no-pager >&2
   return 1
 }
 
-action="${1:-}"
+start_apply_unit() {
+  local release_tag="$1"
+  local binary_sha256="$2"
+  if apply_unit_running; then
+    printf 'an apply task is already running\n' >&2
+    return 1
+  fi
+  SUB2API_MANAGER_LOCK_TIMEOUT_SECONDS=15 run_manager queue-apply "$release_tag" "$binary_sha256"
+  if ! systemctl --no-block start "$APPLY_UNIT"; then
+    run_manager apply-start-failed || true
+    printf 'failed to start the background apply task\n' >&2
+    return 1
+  fi
+  printf '{"status":"accepted","unit":"%s"}\n' "$APPLY_UNIT"
+}
+
 case "$action" in
-  status|check-update)
+  status)
     [[ "$#" -eq 1 ]]
       exec /usr/sbin/runuser --user sub2api --preserve-environment -- "$MANAGER" "$action"
+    ;;
+  check-update)
+    [[ "$#" -eq 1 ]]
+    acquire_control_lock
+    run_manager "$action"
     ;;
   auto-status)
     [[ "$#" -eq 1 ]]
@@ -65,7 +111,15 @@ case "$action" in
       exit 0
     fi
     if printf '%s\n' "$result" | python3 -c 'import json,sys; value=json.load(sys.stdin).get("auto_update", {}); raise SystemExit(0 if value.get("status") in {"apply_queued", "applying", "restart_pending", "rollback_pending"} else 1)'; then
-      run_manager reconcile-apply-status
+      if try_control_lock; then
+        if apply_unit_running; then
+          printf '%s\n' "$result"
+        else
+          run_manager reconcile-apply-status
+        fi
+      else
+        printf '%s\n' "$result"
+      fi
       exit 0
     fi
     printf '%s\n' "$result"
@@ -73,10 +127,15 @@ case "$action" in
   set-auto-update)
     [[ "$#" -eq 2 ]]
     [[ "$2" == "on" || "$2" == "off" ]]
-    exec /usr/sbin/runuser --user sub2api --preserve-environment -- "$MANAGER" "$action" "$2"
+    acquire_control_lock
+    run_manager "$action" "$2"
     ;;
   auto-run)
     [[ "$#" -eq 1 ]]
+    if ! try_control_lock; then
+      run_manager auto-status
+      exit 0
+    fi
     if ! apply_unit_running; then
       run_manager reconcile-apply-status >/dev/null
     fi
@@ -86,20 +145,12 @@ case "$action" in
     [[ "$#" -eq 3 ]]
     [[ "$2" =~ ^fusion-v[0-9]+\.[0-9]+\.[0-9]+-overdraft\.[0-9]+-[0-9a-f]{8}-[0-9a-f]{8}-u[0-9a-f]{8}$ ]]
     [[ "$3" =~ ^[0-9a-f]{64}$ ]]
-    if apply_unit_running; then
-      printf 'an apply task is already running\n' >&2
-      exit 1
-    fi
-    SUB2API_MANAGER_LOCK_TIMEOUT_SECONDS=15 run_manager queue-apply "$2" "$3"
-    if ! systemctl --no-block start "$APPLY_UNIT"; then
-      run_manager apply-start-failed || true
-      printf 'failed to start the background apply task\n' >&2
-      exit 1
-    fi
-    printf '{"status":"accepted","unit":"%s"}\n' "$APPLY_UNIT"
+    acquire_control_lock
+    start_apply_unit "$2" "$3"
     ;;
   apply-queued)
     [[ "$#" -eq 1 ]]
+    acquire_control_lock
     result="$(run_manager apply-prepared)"
     printf '%s\n' "$result"
     run_manager auto-apply-restart
@@ -107,24 +158,29 @@ case "$action" in
     run_manager auto-finish
     ;;
   apply-worker-failed)
-    [[ "$#" -eq 1 ]]
-    run_manager apply-worker-failed "systemd 应用任务异常停止"
+    [[ "$#" -ge 1 && "$#" -le 2 ]]
+    acquire_control_lock
+    run_manager apply-worker-failed "systemd 应用任务异常停止 (${2:-unknown})"
     ;;
   apply-prepared)
     [[ "$#" -eq 1 ]]
-    result="$(run_manager apply-prepared)"
-    printf '%s\n' "$result"
-    run_manager auto-apply-restart
-    restart_with_fallback yes
-    run_manager auto-finish
+    acquire_control_lock
+    result="$(run_manager auto-status)"
+    identity="$(printf '%s\n' "$result" | python3 -c 'import json,sys; value=json.load(sys.stdin).get("auto_update", {}).get("prepared", {}); print(value.get("release_tag", ""), value.get("binary_sha256", ""))')"
+    read -r release_tag binary_sha256 <<<"$identity"
+    [[ "$release_tag" =~ ^fusion-v[0-9]+\.[0-9]+\.[0-9]+-overdraft\.[0-9]+-[0-9a-f]{8}-[0-9a-f]{8}-u[0-9a-f]{8}$ ]]
+    [[ "$binary_sha256" =~ ^[0-9a-f]{64}$ ]]
+    start_apply_unit "$release_tag" "$binary_sha256"
     ;;
   rollback)
     [[ "$#" -eq 1 ]]
+    acquire_control_lock
     run_manager rollback previous
     restart_with_fallback
     ;;
   enable-overdraft)
     [[ "$#" -eq 2 && ( "$2" == "on" || "$2" == "off" ) ]]
+    acquire_control_lock
     run_manager enable-overdraft "$2"
     restart_with_fallback
     ;;

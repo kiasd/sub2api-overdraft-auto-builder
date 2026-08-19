@@ -8,7 +8,9 @@ OnFailure=sub2api-overdraft-apply-failed.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/sub2api-plugin-control apply-queued
+ExecStopPost=/usr/local/sbin/sub2api-plugin-control apply-worker-failed ${SERVICE_RESULT}
 TimeoutStartSec=infinity
+TimeoutStopSec=180
 NoNewPrivileges=false
 ProtectSystem=strict
 ReadWritePaths=/opt/sub2api /var/lib/sub2api-weekly-overdraft
