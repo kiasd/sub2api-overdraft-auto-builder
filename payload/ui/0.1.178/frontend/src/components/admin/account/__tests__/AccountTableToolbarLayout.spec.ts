@@ -12,10 +12,13 @@ const accountsViewSource = readFileSync(
 )
 
 describe('account table toolbar layout', () => {
-  it('gives the search field more room while equal filters grow and wrap', () => {
-    expect(filtersSource).toContain('flex w-full min-w-0 flex-wrap')
-    expect(filtersSource).toContain('flex-[2_1_16rem]')
+  it('keeps the official single-row desktop toolbar while narrow screens can wrap', () => {
+    expect(filtersSource).toContain(
+      'flex w-full min-w-0 flex-wrap items-center gap-3 xl:w-auto xl:flex-1 xl:flex-nowrap'
+    )
+    expect(filtersSource).toContain('flex-[2_1_16rem] xl:max-w-64')
     expect(filtersSource.match(/flex-\[1_1_9rem\]/g)).toHaveLength(5)
+    expect(filtersSource.match(/xl:max-w-40/g)).toHaveLength(5)
     expect(filtersSource).not.toContain('class="w-40"')
   })
 

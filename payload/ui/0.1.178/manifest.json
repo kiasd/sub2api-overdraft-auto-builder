@@ -13,11 +13,11 @@
     },
     {
       "path": "frontend/src/components/admin/account/AccountTableFilters.vue",
-      "sha256": "663a116c3b0d279e1abe75ea79611308fb262e3d2fdf187eba748ea0f5a228db"
+      "sha256": "72ca991e5ac6c8c3f75595cce55824c11a254b030256513c648b15ea8fb049be"
     },
     {
       "path": "frontend/src/components/admin/account/__tests__/AccountTableToolbarLayout.spec.ts",
-      "sha256": "f4436c7b75c68326ba5ca8a1da7ad7a2b4df63d3b222bcd74af26979465b831e"
+      "sha256": "84add7480e510c9c66af982d7fbf09834e016b4fa5a5d02e926166849aac0d91"
     },
     {
       "path": "frontend/src/components/user/dashboard/UserDashboardStats.vue",
