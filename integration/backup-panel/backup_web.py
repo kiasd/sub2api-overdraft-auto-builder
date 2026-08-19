@@ -617,6 +617,32 @@ class BackupHandler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
 
+    def send_error(self, code, message=None, explain=None):
+        headers = getattr(self, "headers", None)
+        accept = headers.get("Accept", "") if headers is not None else ""
+        if "application/json" not in accept.lower():
+            return super().send_error(code, message, explain)
+        messages = {
+            400: "请求格式无效。",
+            403: "页面会话已过期，请刷新后重试。",
+            404: "请求地址不存在。",
+            415: "请求编码不受支持，请刷新页面后重试。",
+        }
+        body = json.dumps(
+            {
+                "ok": False,
+                "status": code,
+                "message": messages.get(code, message or "请求失败。"),
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        self.send_response(code)
+        self.send_common_headers()
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def authorized(self):
         header = self.headers.get("Authorization", "")
         if not header.startswith("Basic "):
@@ -710,6 +736,10 @@ class BackupHandler(BaseHTTPRequestHandler):
             RESTORE_LOCK.release()
 
     def read_form(self, maximum=16384):
+        content_type = self.headers.get("Content-Type", "").partition(";")[0].strip().lower()
+        if content_type != "application/x-www-form-urlencoded":
+            self.send_error(415)
+            return None
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -1523,8 +1553,12 @@ class BackupHandler(BaseHTTPRequestHandler):
         const response = await fetch('/plugin', {{
           method: 'POST',
           headers: {{ Accept: 'application/json' }},
-          body: new FormData(applyForm),
+          body: new URLSearchParams(new FormData(applyForm)),
         }});
+        const responseType = response.headers.get('content-type') || '';
+        if (!responseType.includes('application/json')) {{
+          throw new Error('后台应用请求失败（HTTP ' + response.status + '）');
+        }}
         const result = await response.json();
         if (!response.ok || result.ok !== true) throw new Error(result.message || '后台应用任务启动失败');
         pluginOperationActive = true;

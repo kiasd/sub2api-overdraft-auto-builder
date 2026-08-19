@@ -1,9 +1,15 @@
+import base64
 import importlib.util
 import io
+import json
 import os
 import shutil
 import subprocess
+import threading
 import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -98,6 +104,108 @@ class BackupPanelTests(unittest.TestCase):
         self.assertEqual(status["plugin_operation"]["progress"], 45)
         self.assertEqual(status["plugin_operation"]["stage"], auto["stage"])
 
+    def test_apply_http_request_uses_urlencoded_form_and_returns_json(self):
+        tag = "fusion-v0.1.178-overdraft.1-e0c48a19-45e40b4f-u0ca66d07"
+        digest = "f" * 64
+
+        def control(action, *arguments, timeout=30):
+            if action == "apply-start":
+                self.assertEqual(arguments, (tag, digest))
+                return {"ok": True, "status": "accepted"}
+            if action == "auto-status":
+                return {
+                    "ok": True,
+                    "auto_update": {
+                        "status": "ready",
+                        "prepared": {"status": "ready"},
+                    },
+                }
+            self.fail(f"unexpected control action: {action}")
+
+        server = panel.ThreadingHTTPServer(("127.0.0.1", 0), panel.BackupHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            fields = {
+                "csrf_token": panel.CSRF_TOKEN,
+                "action": "apply-prepared",
+                "expected_tag": tag,
+                "expected_sha256": digest,
+            }
+            body = urllib.parse.urlencode(fields).encode("ascii")
+            credentials = base64.b64encode(
+                f"{panel.WEB_USER}:{panel.WEB_PASSWORD}".encode("utf-8")
+            ).decode("ascii")
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/plugin",
+                data=body,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Basic {credentials}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            with mock.patch.object(panel, "plugin_control", side_effect=control), \
+                urllib.request.urlopen(request, timeout=5) as response:
+                payload = json.load(response)
+
+            self.assertEqual(response.status, 202)
+            self.assertTrue(response.headers.get_content_type() == "application/json")
+            self.assertIs(payload["ok"], True)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_json_apply_errors_never_return_an_html_error_page(self):
+        server = panel.ThreadingHTTPServer(("127.0.0.1", 0), panel.BackupHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            credentials = base64.b64encode(
+                f"{panel.WEB_USER}:{panel.WEB_PASSWORD}".encode("utf-8")
+            ).decode("ascii")
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/plugin",
+                data=b"csrf_token=stale&action=apply-prepared",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Basic {credentials}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(request, timeout=5)
+            error = raised.exception
+            payload = json.loads(error.read().decode("utf-8"))
+
+            self.assertEqual(error.code, 403)
+            self.assertEqual(error.headers.get_content_type(), "application/json")
+            self.assertIs(payload["ok"], False)
+            self.assertNotIn("<!DOCTYPE", json.dumps(payload))
+
+            multipart_request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/plugin",
+                data=b"--boundary--\r\n",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Basic {credentials}",
+                    "Content-Type": "multipart/form-data; boundary=boundary",
+                },
+            )
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(multipart_request, timeout=5)
+            error = raised.exception
+            payload = json.loads(error.read().decode("utf-8"))
+
+            self.assertEqual(error.code, 415)
+            self.assertEqual(error.headers.get_content_type(), "application/json")
+            self.assertIs(payload["ok"], False)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
     def test_rendered_panel_contains_async_apply_and_fast_progress_polling(self):
         tag = "fusion-v0.1.178-overdraft.1-e0c48a19-45e40b4f-u0ca66d07"
         digest = "f" * 64
@@ -180,6 +288,9 @@ class BackupPanelTests(unittest.TestCase):
 
         page = handler.wfile.getvalue().decode("utf-8")
         self.assertIn('headers: { Accept: \'application/json\' }', page)
+        self.assertIn("body: new URLSearchParams(new FormData(applyForm))", page)
+        self.assertNotIn("body: new FormData(applyForm)", page)
+        self.assertIn("response.headers.get('content-type')", page)
         self.assertIn("setTimeout(refreshServerStatus, pluginOperationActive ? 500 : 30000)", page)
         self.assertIn(f'name="expected_tag" value="{tag}"', page)
         self.assertIn(f'name="expected_sha256" value="{digest}"', page)
