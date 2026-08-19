@@ -4,6 +4,7 @@ set -Eeuo pipefail
 MANAGER=/opt/sub2api/plugins/weekly-overdraft/manager.sh
 ENV_FILE=/etc/sub2api/weekly-overdraft-manager.env
 STATE_ROOT=/var/lib/sub2api-weekly-overdraft
+APPLY_UNIT=sub2api-overdraft-apply.service
 
 if [[ "$EUID" -ne 0 ]]; then
   printf 'plugin control must run through sudo\n' >&2
@@ -28,23 +29,46 @@ run_manager() {
   /usr/sbin/runuser --user sub2api --preserve-environment -- "$MANAGER" "$@"
 }
 
+apply_unit_running() {
+  local state
+  state="$(systemctl show --property=ActiveState --value "$APPLY_UNIT" 2>/dev/null || true)"
+  [[ "$state" == "activating" || "$state" == "active" || "$state" == "reloading" || "$state" == "deactivating" ]]
+}
+
 restart_with_fallback() {
-  if systemctl restart sub2api.service; then
-    systemctl is-active --quiet sub2api.service
+  local rollback_upgrade="${1:-no}"
+  if systemctl restart sub2api.service && systemctl is-active --quiet sub2api.service; then
     return
   fi
-  # A failed candidate health check stages the paired rollback. The second
-  # start applies that pending database/program rollback before launching.
-  systemctl restart sub2api.service || true
+  # An upgrade start failure can happen before ExecStartPost stages rollback.
+  if [[ "$rollback_upgrade" == "yes" ]]; then
+    run_manager rollback previous --reason start_failure || true
+  fi
+  if systemctl restart sub2api.service && systemctl is-active --quiet sub2api.service; then
+    return
+  fi
   journalctl -u sub2api.service -n 80 --no-pager >&2
   return 1
 }
 
 action="${1:-}"
 case "$action" in
-  status|check-update|auto-status)
+  status|check-update)
     [[ "$#" -eq 1 ]]
       exec /usr/sbin/runuser --user sub2api --preserve-environment -- "$MANAGER" "$action"
+    ;;
+  auto-status)
+    [[ "$#" -eq 1 ]]
+    result="$(run_manager auto-status)"
+    if apply_unit_running; then
+      printf '%s\n' "$result"
+      exit 0
+    fi
+    if printf '%s\n' "$result" | python3 -c 'import json,sys; value=json.load(sys.stdin).get("auto_update", {}); raise SystemExit(0 if value.get("status") in {"apply_queued", "applying", "restart_pending", "rollback_pending"} else 1)'; then
+      run_manager reconcile-apply-status
+      exit 0
+    fi
+    printf '%s\n' "$result"
     ;;
   set-auto-update)
     [[ "$#" -eq 2 ]]
@@ -53,13 +77,45 @@ case "$action" in
     ;;
   auto-run)
     [[ "$#" -eq 1 ]]
+    if ! apply_unit_running; then
+      run_manager reconcile-apply-status >/dev/null
+    fi
     run_manager auto-run
+    ;;
+  apply-start)
+    [[ "$#" -eq 3 ]]
+    [[ "$2" =~ ^fusion-v[0-9]+\.[0-9]+\.[0-9]+-overdraft\.[0-9]+-[0-9a-f]{8}-[0-9a-f]{8}-u[0-9a-f]{8}$ ]]
+    [[ "$3" =~ ^[0-9a-f]{64}$ ]]
+    if apply_unit_running; then
+      printf 'an apply task is already running\n' >&2
+      exit 1
+    fi
+    SUB2API_MANAGER_LOCK_TIMEOUT_SECONDS=15 run_manager queue-apply "$2" "$3"
+    if ! systemctl --no-block start "$APPLY_UNIT"; then
+      run_manager apply-start-failed || true
+      printf 'failed to start the background apply task\n' >&2
+      exit 1
+    fi
+    printf '{"status":"accepted","unit":"%s"}\n' "$APPLY_UNIT"
+    ;;
+  apply-queued)
+    [[ "$#" -eq 1 ]]
+    result="$(run_manager apply-prepared)"
+    printf '%s\n' "$result"
+    run_manager auto-apply-restart
+    restart_with_fallback yes
+    run_manager auto-finish
+    ;;
+  apply-worker-failed)
+    [[ "$#" -eq 1 ]]
+    run_manager apply-worker-failed "systemd 应用任务异常停止"
     ;;
   apply-prepared)
     [[ "$#" -eq 1 ]]
     result="$(run_manager apply-prepared)"
     printf '%s\n' "$result"
-    restart_with_fallback
+    run_manager auto-apply-restart
+    restart_with_fallback yes
     run_manager auto-finish
     ;;
   rollback)

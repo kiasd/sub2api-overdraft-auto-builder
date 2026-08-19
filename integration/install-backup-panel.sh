@@ -27,6 +27,12 @@ install -d -o root -g root -m 0755 /etc/systemd/system/sub2api-backup-web.servic
 install -o root -g root -m 0644 \
   "$SOURCE_DIR/backup-panel/weekly-overdraft-control.conf" \
   /etc/systemd/system/sub2api-backup-web.service.d/weekly-overdraft-control.conf
+install -o root -g root -m 0644 \
+  "$SOURCE_DIR/../systemd/sub2api-overdraft-apply.service" \
+  /etc/systemd/system/sub2api-overdraft-apply.service
+install -o root -g root -m 0644 \
+  "$SOURCE_DIR/../systemd/sub2api-overdraft-apply-failed.service" \
+  /etc/systemd/system/sub2api-overdraft-apply-failed.service
 python3 -m py_compile "$PANEL"
 systemctl daemon-reload
 systemctl restart sub2api-backup-web.service

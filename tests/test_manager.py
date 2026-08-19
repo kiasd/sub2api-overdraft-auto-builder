@@ -326,6 +326,34 @@ class ManagerTests(unittest.TestCase):
                 with self.assertRaises(manager.ManagerError):
                     manager.choose_backup("0.1.175")
 
+    def test_stage_rollback_persists_intent_before_binary_restore(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            backup = state / "backups" / "backup"
+            backup.mkdir(parents=True)
+            binary = backup / "sub2api"
+            binary.write_bytes(b"old-binary")
+            (backup / "database.dump").write_bytes(b"database")
+            metadata = {
+                "backup_id": "backup",
+                "from_version": "0.1.178",
+                "from_commit": "c" * 40,
+                "from_channel": "official",
+                "binary_sha256": manager.sha256_file(binary),
+                "status": "ready",
+            }
+            manager.write_json_atomic(backup / "metadata.json", metadata)
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}), \
+                mock.patch.object(manager, "atomic_replace_binary") as replace:
+                result = manager.stage_rollback("previous", reason="health_check_failed")
+
+            self.assertEqual(result["status"], "rollback_staged")
+            replace.assert_not_called()
+            pending = manager.read_json(state / "pending-rollback.json", {})
+            self.assertEqual(pending["phase"], "rollback_pending")
+            self.assertEqual(Path(pending["binary_backup"]), binary.resolve())
+            self.assertEqual(pending["reason"], "health_check_failed")
+
     def test_auto_update_disabled_does_not_check_or_upgrade(self):
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
@@ -519,6 +547,12 @@ class ManagerTests(unittest.TestCase):
                     mock.patch.object(manager, "create_backup", return_value=("backup", backup_dir, metadata)), \
                     mock.patch.object(manager, "finalize_database_backup"), \
                     mock.patch.object(manager, "atomic_replace_binary") as replace:
+                    def assert_switch_intent(_artifact):
+                        pending = manager.read_json(state / "pending-upgrade.json", {})
+                        self.assertEqual(pending["phase"], "switch_pending")
+                        self.assertEqual(pending["target_binary_sha256"], prepared["binary_sha256"])
+
+                    replace.side_effect = assert_switch_intent
                     result = manager.apply_prepared()
                 self.assertEqual(result["status"], "staged")
                 replace.assert_called_once_with(artifact)
@@ -548,6 +582,358 @@ class ManagerTests(unittest.TestCase):
                     with self.assertRaisesRegex(manager.ManagerError, "低于当前运行版本"):
                         manager.apply_prepared()
                 backup.assert_not_called()
+
+    def test_apply_prepared_preserves_ready_candidate_when_backup_fails_before_switch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            artifact = state / "releases" / "candidate" / "sub2api"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"candidate")
+            prepared = {
+                "status": "ready",
+                "version": "0.1.179-overdraft.1",
+                "channel": "overdraft",
+                "source_commit": "a" * 40,
+                "artifact": str(artifact),
+                "binary_sha256": manager.sha256_file(artifact),
+            }
+            backup_dir = state / "backups" / "backup"
+            backup_dir.mkdir(parents=True)
+            backup_meta = {"backup_id": "backup", "status": "preflight"}
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
+                manager.write_json_atomic(manager.prepared_update_path(), prepared)
+                with mock.patch.object(
+                    manager,
+                    "current_build",
+                    return_value={"version": "0.1.178", "commit": "c" * 40},
+                ), mock.patch.object(
+                    manager,
+                    "create_backup",
+                    return_value=("backup", backup_dir, backup_meta),
+                ), mock.patch.object(
+                    manager,
+                    "finalize_database_backup",
+                    side_effect=manager.ManagerError("database backup failed"),
+                ), mock.patch.object(manager, "atomic_replace_binary") as replace:
+                    with self.assertRaisesRegex(manager.ManagerError, "database backup failed"):
+                        manager.apply_prepared()
+
+                replace.assert_not_called()
+                self.assertEqual(manager.prepared_update(), prepared)
+                status = manager.auto_update_status()
+                self.assertEqual(status["status"], "apply_failed")
+                self.assertEqual(status["last_result"], "apply_failed")
+                self.assertEqual(status["progress"], 45)
+                self.assertEqual(status["prepared"]["status"], "ready")
+                self.assertIn("database backup failed", status["last_error"])
+                self.assertFalse((state / "pending-upgrade.json").exists())
+
+    def test_queue_apply_binds_the_confirmed_release_and_blocks_monitor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            artifact = state / "releases" / "candidate" / "sub2api"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"candidate")
+            digest = manager.sha256_file(artifact)
+            tag = "fusion-v0.1.179-overdraft.1-12345678-abcdef01-u87654321"
+            prepared = {
+                "status": "ready",
+                "version": "0.1.179-overdraft.1",
+                "channel": "overdraft",
+                "release_tag": tag,
+                "source_commit": "a" * 40,
+                "artifact": str(artifact),
+                "binary_sha256": digest,
+            }
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
+                manager.write_json_atomic(manager.prepared_update_path(), prepared)
+                queued = manager.queue_prepared_apply(tag, digest)
+                with mock.patch.object(manager, "check_update") as check:
+                    busy = manager.auto_run()
+
+                self.assertEqual(queued["status"], "apply_queued")
+                self.assertEqual(queued["apply_request"]["release_tag"], tag)
+                self.assertEqual(queued["apply_request"]["binary_sha256"], digest)
+                self.assertEqual(busy["status"], "apply_queued")
+                self.assertIs(busy["busy"], True)
+                check.assert_not_called()
+
+                with self.assertRaisesRegex(manager.ManagerError, "已变化"):
+                    manager.validate_prepared_identity(prepared, tag, "0" * 64)
+
+    def test_queue_apply_resumes_only_the_matching_pending_upgrade(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            artifact = state / "releases" / "candidate" / "sub2api"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"candidate")
+            digest = manager.sha256_file(artifact)
+            tag = "fusion-v0.1.179-overdraft.1-12345678-abcdef01-u87654321"
+            prepared = {
+                "status": "staged",
+                "version": "0.1.179-overdraft.1",
+                "channel": "overdraft",
+                "release_tag": tag,
+                "source_commit": "a" * 40,
+                "artifact": str(artifact),
+                "binary_sha256": digest,
+            }
+            pending = {
+                "backup_id": "backup",
+                "from_version": "0.1.178",
+                "from_channel": "official",
+                "to_version": prepared["version"],
+                "channel": "overdraft",
+                "release_tag": tag,
+                "old_binary_sha256": "1" * 64,
+                "target_binary_sha256": digest,
+                "phase": "switched",
+            }
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
+                manager.write_json_atomic(manager.prepared_update_path(), prepared)
+                manager.write_json_atomic(state / "pending-upgrade.json", pending)
+                manager.write_auto_update_status(
+                    status="apply_failed",
+                    prepared=prepared,
+                )
+
+                queued = manager.queue_prepared_apply(tag, digest)
+                self.assertIs(queued["apply_request"]["resume_pending"], True)
+                self.assertEqual(manager.auto_update_status()["status"], "apply_queued")
+                self.assertEqual(
+                    manager.read_json(state / "pending-upgrade.json", {}), pending
+                )
+
+                manager.write_auto_update_status(status="apply_failed")
+                pending["target_binary_sha256"] = "0" * 64
+                manager.write_json_atomic(state / "pending-upgrade.json", pending)
+                with self.assertRaisesRegex(manager.ManagerError, "其他升级"):
+                    manager.queue_prepared_apply(tag, digest)
+
+    def test_apply_prepared_resumes_when_switch_intent_matches_disk_candidate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            binary = state / "installed" / "sub2api"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"candidate")
+            artifact = state / "releases" / "candidate" / "sub2api"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"candidate")
+            digest = manager.sha256_file(artifact)
+            tag = "fusion-v0.1.179-overdraft.1-12345678-abcdef01-u87654321"
+            prepared = {
+                "status": "ready",
+                "version": "0.1.179-overdraft.1",
+                "channel": "overdraft",
+                "release_tag": tag,
+                "source_commit": "a" * 40,
+                "artifact": str(artifact),
+                "binary_sha256": digest,
+            }
+            pending = {
+                "operation_id": "operation",
+                "backup_id": "backup",
+                "from_version": "0.1.178",
+                "from_channel": "official",
+                "to_version": prepared["version"],
+                "channel": "overdraft",
+                "source_commit": prepared["source_commit"],
+                "release_tag": tag,
+                "old_binary_sha256": "1" * 64,
+                "target_binary_sha256": digest,
+                "phase": "switch_pending",
+                "staged_at": "2026-08-19T00:00:00+00:00",
+            }
+            with mock.patch.dict(
+                os.environ,
+                {"SUB2API_STATE_ROOT": temporary, "SUB2API_BINARY": str(binary)},
+            ):
+                manager.write_json_atomic(manager.prepared_update_path(), prepared)
+                manager.write_json_atomic(state / "pending-upgrade.json", pending)
+                with mock.patch.object(manager, "create_backup") as backup, \
+                    mock.patch.object(manager, "atomic_replace_binary") as replace:
+                    result = manager.apply_prepared(tag, digest)
+
+                self.assertEqual(result["status"], "staged")
+                backup.assert_not_called()
+                replace.assert_not_called()
+                resumed = manager.read_json(state / "pending-upgrade.json", {})
+                self.assertEqual(resumed["phase"], "switched")
+                self.assertEqual(manager.auto_update_status()["progress"], 75)
+
+    def test_post_start_check_records_updated_at_full_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            pending = {
+                "backup_id": "backup",
+                "from_version": "0.1.178",
+                "to_version": "0.1.179-overdraft.1",
+                "channel": "overdraft",
+                "source_commit": "a" * 40,
+                "staged_at": "2026-08-19T00:00:00+00:00",
+            }
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
+                manager.write_json_atomic(state / "pending-upgrade.json", pending)
+                manager.write_json_atomic(
+                    manager.patch_state_path(pending["to_version"], pending["channel"]),
+                    {"status": "staged"},
+                )
+                with mock.patch.object(manager, "health_check", return_value=True):
+                    result = manager.post_start_check()
+
+                self.assertEqual(result, {"status": "verified", "version": pending["to_version"]})
+                status = manager.auto_update_status()
+                self.assertEqual(status["status"], "updated")
+                self.assertEqual(status["last_result"], "updated")
+                self.assertEqual(status["progress"], 100)
+                self.assertEqual(status["prepared"], {})
+                self.assertFalse((state / "pending-upgrade.json").exists())
+                self.assertEqual(
+                    manager.read_json(state / "current.json", {})["status"],
+                    "verified",
+                )
+                self.assertEqual(
+                    manager.read_json(
+                        manager.patch_state_path(pending["to_version"], pending["channel"]),
+                        {},
+                    )["status"],
+                    "verified",
+                )
+
+    def test_post_start_old_hash_after_switch_stages_paired_database_rollback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            installed = state / "installed" / "sub2api"
+            installed.parent.mkdir(parents=True)
+            installed.write_bytes(b"old-binary")
+            old_hash = manager.sha256_file(installed)
+            backup = state / "backups" / "backup"
+            backup.mkdir(parents=True)
+            (backup / "sub2api").write_bytes(b"old-binary")
+            (backup / "database.dump").write_bytes(b"database")
+            manager.write_json_atomic(
+                backup / "metadata.json",
+                {
+                    "backup_id": "backup",
+                    "from_version": "0.1.178",
+                    "from_commit": "c" * 40,
+                    "from_channel": "official",
+                    "binary_sha256": old_hash,
+                    "status": "ready",
+                },
+            )
+            pending = {
+                "backup_id": "backup",
+                "from_version": "0.1.178",
+                "from_channel": "official",
+                "to_version": "0.1.179-overdraft.1",
+                "channel": "overdraft",
+                "source_commit": "a" * 40,
+                "old_binary_sha256": old_hash,
+                "target_binary_sha256": manager.hashlib.sha256(b"candidate").hexdigest(),
+                "phase": "switched",
+                "staged_at": "2026-08-19T00:00:00+00:00",
+            }
+            with mock.patch.dict(
+                os.environ,
+                {"SUB2API_STATE_ROOT": temporary, "SUB2API_BINARY": str(installed)},
+            ):
+                manager.write_json_atomic(state / "pending-upgrade.json", pending)
+                with mock.patch.object(manager, "health_check") as health:
+                    with self.assertRaisesRegex(manager.ManagerError, "automatic rollback staged"):
+                        manager.post_start_check()
+
+                health.assert_not_called()
+                self.assertFalse((state / "pending-upgrade.json").exists())
+                rollback = manager.read_json(state / "pending-rollback.json", {})
+                self.assertEqual(rollback["backup_id"], "backup")
+                self.assertEqual(rollback["reason"], "binary_mismatch")
+                self.assertEqual(Path(rollback["database_dump"]), (backup / "database.dump").resolve())
+
+    def test_apply_pending_records_rolled_back_at_full_progress(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            dump = state / "backups" / "backup" / "database.dump"
+            backup_binary = state / "backups" / "backup" / "sub2api"
+            backup_binary.parent.mkdir(parents=True)
+            backup_binary.write_bytes(b"old-binary")
+            pending = {
+                "backup_id": "backup",
+                "target_version": "0.1.178",
+                "target_commit": "c" * 40,
+                "target_channel": "official",
+                "binary_backup": str(backup_binary),
+                "binary_sha256": manager.sha256_file(backup_binary),
+                "database_dump": str(dump),
+                "reason": "health_check_failed",
+                "staged_at": "2026-08-19T00:00:00+00:00",
+            }
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
+                manager.write_json_atomic(state / "pending-rollback.json", pending)
+                with mock.patch.object(manager, "restore_database") as restore, \
+                    mock.patch.object(manager, "atomic_replace_binary") as replace:
+                    result = manager.apply_pending()
+
+                self.assertEqual(result, {"status": "rollback_applied", "version": "0.1.178"})
+                restore.assert_called_once_with(dump)
+                replace.assert_called_once_with(backup_binary)
+                status = manager.auto_update_status()
+                self.assertEqual(status["status"], "rolled_back")
+                self.assertEqual(status["last_result"], "rolled_back")
+                self.assertEqual(status["progress"], 100)
+                self.assertEqual(status["prepared"], {})
+                self.assertFalse((state / "pending-rollback.json").exists())
+                self.assertEqual(
+                    manager.read_json(state / "current.json", {})["status"],
+                    "rolled_back",
+                )
+                self.assertEqual(
+                    manager.read_json(state / "last-rollback.json", {})["status"],
+                    "applied",
+                )
+
+    def test_reconcile_marks_stale_inactive_apply_as_retryable_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
+                manager.write_auto_update_status(
+                    status="applying",
+                    last_result="applying",
+                    progress=45,
+                    stage="正在生成切换前数据库恢复点",
+                    last_started_at="2026-08-19T00:00:00+00:00",
+                )
+                result = manager.reconcile_apply_status()
+
+                self.assertEqual(result["status"], "ok")
+                self.assertEqual(result["auto_update"]["status"], "apply_failed")
+                self.assertEqual(result["auto_update"]["progress"], 45)
+                self.assertIn("候选包仍可重新应用", result["auto_update"]["stage"])
+
+    def test_worker_failure_with_pending_rollback_only_offers_rollback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            prepared = {
+                "status": "staged",
+                "version": "0.1.179-overdraft.1",
+                "binary_sha256": "f" * 64,
+            }
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
+                manager.write_json_atomic(manager.prepared_update_path(), prepared)
+                manager.write_json_atomic(
+                    state / "pending-rollback.json",
+                    {"backup_id": "backup", "phase": "rollback_pending"},
+                )
+                manager.write_auto_update_status(
+                    status="rollback_pending",
+                    progress=95,
+                    prepared=prepared,
+                )
+
+                failed = manager.apply_worker_failed("worker stopped")
+
+                self.assertEqual(failed["status"], "apply_failed")
+                self.assertEqual(failed["prepared"], {})
+                self.assertIn("重新执行回退", failed["stage"])
 
 
 if __name__ == "__main__":

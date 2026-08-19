@@ -44,6 +44,7 @@ RESTORE_LOCK = threading.Lock()
 PLUGIN_LOCK = threading.Lock()
 PLUGIN_UPDATE_STATUS_LOCK = threading.Lock()
 EMAIL_WAKE = threading.Event()
+PLUGIN_ACTIVE_STATUSES = {"apply_queued", "applying", "restart_pending", "rollback_pending"}
 CSRF_TOKEN = secrets.token_urlsafe(32)
 EMAIL_CONFIG_DEFAULTS = {
     "enabled": False,
@@ -97,8 +98,6 @@ PLUGIN_AUTO_STATUS = {
     "min_interval_hours": 3,
     "max_interval_hours": 5,
 }
-
-
 def read_json(path, default):
     try:
         with path.open("r", encoding="utf-8") as source:
@@ -338,10 +337,9 @@ def service_state(unit):
         return "unknown"
 
 
-def plugin_control(action, value=None, timeout=30):
+def plugin_control(action, *arguments, timeout=30):
     command = ["/usr/bin/sudo", str(PLUGIN_CONTROL), action]
-    if value is not None:
-        command.append(value)
+    command.extend(str(value) for value in arguments if value is not None)
     try:
         result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -462,16 +460,22 @@ def plugin_auto_status():
 
 
 def refresh_plugin_auto_status():
-    if PLUGIN_LOCK.acquire(blocking=False):
-        try:
-            save_plugin_auto_status(plugin_control("auto-status", timeout=20))
-        finally:
-            PLUGIN_LOCK.release()
+    save_plugin_auto_status(plugin_control("auto-status", timeout=20))
     return plugin_auto_status()
 
 
 def collect_server_status():
-    refresh_plugin_auto_status()
+    current_auto_status = refresh_plugin_auto_status()
+    operation_state = str(current_auto_status.get("status", ""))
+    operation_status = {
+        "active": operation_state in PLUGIN_ACTIVE_STATUSES,
+        "status": operation_state or "idle",
+        "progress": current_auto_status.get("progress", 0),
+        "stage": current_auto_status.get("stage", ""),
+        "error": current_auto_status.get("last_error", ""),
+        "started_at": current_auto_status.get("last_started_at", ""),
+        "finished_at": current_auto_status.get("finished_at", ""),
+    }
     current_traffic = traffic_snapshot()
     previous_traffic = MONITOR_STATE.get("last_email_traffic", {})
     total = traffic_totals(current_traffic)
@@ -494,7 +498,8 @@ def collect_server_status():
         "traffic_total": total,
         "traffic_delta": delta,
         "plugin_update": plugin_update_status(),
-        "plugin_auto_update": plugin_auto_status(),
+        "plugin_auto_update": current_auto_status,
+        "plugin_operation": operation_status,
         "services": {
             "Sub2API": service_state("sub2api.service"),
             "PostgreSQL": service_state("postgresql.service"),
@@ -844,18 +849,44 @@ class BackupHandler(BaseHTTPRequestHandler):
         if action == "set-auto-update" and value not in {"on", "off"}:
             self.send_error(400)
             return
+        if action == "apply-prepared":
+            expected_tag = form.get("expected_tag", [""])[0].strip()
+            expected_hash = form.get("expected_sha256", [""])[0].strip().lower()
+            if not expected_tag or len(expected_tag) > 160 or not re.fullmatch(r"[0-9a-z.-]+", expected_tag):
+                self.respond_operation_result(400, "候选 Release 标签无效。", "插件操作结果")
+                return
+            if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+                self.respond_operation_result(400, "候选程序 SHA-256 无效。", "插件操作结果")
+                return
+        else:
+            expected_tag = ""
+            expected_hash = ""
+        current_auto = refresh_plugin_auto_status()
+        if action != "apply-prepared" and str(current_auto.get("status", "")) in PLUGIN_ACTIVE_STATUSES:
+            self.respond_operation_result(409, "版本应用或回退任务正在执行，请等待完成。", "版本操作结果")
+            return
         if not PLUGIN_LOCK.acquire(blocking=False):
             self.respond_operation_result(409, "已有 Release 监控或更新操作正在执行。", "版本操作结果")
             return
         try:
-            control_action = "auto-run" if action == "check-update" else action
-            result = plugin_control(
-                control_action,
-                value if action in {"enable-overdraft", "set-auto-update"} else None,
-                timeouts[action],
-            )
+            if action == "apply-prepared":
+                result = plugin_control(
+                    "apply-start", expected_tag, expected_hash, timeout=30
+                )
+            else:
+                control_action = "auto-run" if action == "check-update" else action
+                arguments = (
+                    (value,)
+                    if action in {"enable-overdraft", "set-auto-update"}
+                    else ()
+                )
+                result = plugin_control(
+                    control_action, *arguments, timeout=timeouts[action]
+                )
         finally:
             PLUGIN_LOCK.release()
+        if action == "apply-prepared":
+            save_plugin_auto_status(plugin_control("auto-status", timeout=20))
         if action == "check-update":
             save_plugin_update_result(result)
             save_plugin_auto_status(result)
@@ -869,15 +900,11 @@ class BackupHandler(BaseHTTPRequestHandler):
         labels = {
             "check-update": "构建仓库监控已完成。",
             "set-auto-update": "Release 监控设置已更新。",
-            "apply-prepared": "准备好的版本已应用并完成健康检查。",
+            "apply-prepared": "后台应用任务已启动，正在执行完整备份。",
             "rollback": "回退、重启和健康检查已完成。",
             "enable-overdraft": "透支设置已更新并完成重启。",
         }
         detail = labels[action]
-        if action == "apply-prepared":
-            refreshed = plugin_control("check-update", timeout=60)
-            save_plugin_update_result(refreshed)
-            save_plugin_auto_status(plugin_control("auto-status", timeout=20))
         if action == "check-update":
             monitor_status = str(result.get("status", "unknown"))
             if monitor_status == "ready":
@@ -891,7 +918,7 @@ class BackupHandler(BaseHTTPRequestHandler):
             else:
                 detail = "构建仓库检查完成，当前没有需要应用的新 Release。"
         set_plugin_action_status("success", detail)
-        self.respond_operation_result(200, detail, "插件操作结果")
+        self.respond_operation_result(202 if action == "apply-prepared" else 200, detail, "插件操作结果")
 
     def run_restore(self, name):
         global RESTORE_STATUS
@@ -931,6 +958,18 @@ class BackupHandler(BaseHTTPRequestHandler):
         self.respond_operation_result(status, message, "数据库恢复结果")
 
     def respond_operation_result(self, status, message, title="数据库备份结果"):
+        if "application/json" in self.headers.get("Accept", "").lower():
+            body = json.dumps(
+                {"ok": 200 <= status < 300, "status": status, "message": message},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            self.send_response(status)
+            self.send_common_headers()
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         body = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title><style>body{{margin:0;background:#f3f5f7;color:#17202a;font:14px Segoe UI,Arial,"Microsoft YaHei",sans-serif}}main{{width:min(620px,calc(100% - 32px));margin:12vh auto;background:#fff;border:1px solid #d8dee6;border-radius:6px;padding:28px}}h1{{font-size:20px;margin:0 0 14px}}p{{line-height:1.7;overflow-wrap:anywhere}}a{{display:inline-block;margin-top:10px;color:#166534;font-weight:700;text-decoration:none}}</style></head><body><main><h1>{html.escape(title)}</h1><p>{html.escape(message)}</p><a href="/">返回备份管理</a></main></body></html>""".encode("utf-8")
         self.send_response(status)
         self.send_common_headers()
@@ -1050,7 +1089,12 @@ class BackupHandler(BaseHTTPRequestHandler):
         auto_status_labels = {
             "no_update": "无更新",
             "updated": "已完成更新",
+            "apply_queued": "已进入后台应用队列",
+            "applying": "正在应用",
+            "apply_failed": "应用失败，可重试",
             "restart_pending": "等待健康检查",
+            "rollback_pending": "正在恢复旧版",
+            "rolled_back": "候选失败，已恢复旧版",
             "waiting_builder": "官方已更新，等待仓库编译",
             "building": "GitHub 正在编译",
             "build_failed": "GitHub 编译失败，保留旧版",
@@ -1065,14 +1109,26 @@ class BackupHandler(BaseHTTPRequestHandler):
         auto_progress = max(0, min(100, int(auto_status.get("progress", 0) or 0)))
         auto_stage = html.escape(str(auto_status.get("stage") or "尚未开始"))
         prepared = auto_status.get("prepared", {}) if isinstance(auto_status.get("prepared", {}), dict) else {}
-        auto_ready = auto_status.get("status") == "ready" and prepared.get("status") == "ready"
-        auto_apply_label = "应用已验证版本" if auto_ready else {
+        auto_state = str(auto_status.get("status", ""))
+        auto_active = auto_state in PLUGIN_ACTIVE_STATUSES
+        auto_ready = (
+            auto_state == "ready" and prepared.get("status") == "ready"
+        ) or (
+            auto_state == "apply_failed" and prepared.get("status") in {"ready", "staged"}
+        )
+        auto_apply_label = ("重新应用已验证版本" if auto_state == "apply_failed" else "应用已验证版本") if auto_ready else {
+            "apply_queued": "应用任务排队中",
+            "applying": "正在备份并应用",
+            "restart_pending": "正在重启并检查",
+            "rollback_pending": "正在自动恢复旧版",
+            "rolled_back": "已恢复旧版",
+            "apply_failed": "请先执行回退",
             "waiting_builder": "等待仓库跟进官方版本",
             "building": "仓库编译中",
             "failed": "构建失败，保持旧版",
             "downloading": "正在下载候选包",
-        }.get(str(auto_status.get("status", "")), "暂无可应用版本")
-        auto_apply_disabled = "" if auto_ready else " disabled"
+        }.get(auto_state, "暂无可应用版本")
+        auto_apply_disabled = "" if auto_ready and not auto_active else " disabled"
         auto_apply_confirm = "确认应用已通过仓库测试和校验的版本？系统会先执行完整备份。"
         prepared_info = (
             f"已验证候选 {html.escape(str(prepared.get('version', '未知')))} · "
@@ -1209,6 +1265,8 @@ class BackupHandler(BaseHTTPRequestHandler):
     .plugin-progress {{ display:grid; grid-template-columns:minmax(120px,1fr) auto; gap:10px; align-items:center; margin-top:14px; }}
     .plugin-progress-track {{ height:9px; overflow:hidden; border-radius:5px; background:#e5e7eb; }}
     .plugin-progress-bar {{ height:100%; width:0; border-radius:5px; background:#166534; transition:width .35s ease; }}
+    .plugin-progress-bar.failed {{ background:#dc2626; }}
+    .plugin-progress-bar.rolled-back {{ background:#d97706; }}
     .plugin-progress-label {{ min-width:42px; color:var(--muted); text-align:right; font-variant-numeric:tabular-nums; }}
     .plugin-stage {{ margin-top:6px; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }}
     .mail-header {{ display:flex; align-items:flex-start; justify-content:space-between; gap:18px; margin-bottom:18px; }}
@@ -1292,7 +1350,7 @@ class BackupHandler(BaseHTTPRequestHandler):
       </div>
       <div class="plugin-actions">
         <form method="post" action="/plugin"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="check-update"><button class="plugin-button" type="submit">检查仓库</button></form>
-        <form id="pluginApplyForm" method="post" action="/plugin" onsubmit="return confirm('{auto_apply_confirm}')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input id="pluginApplyAction" type="hidden" name="action" value="apply-prepared"><button id="pluginApplyButton" class="plugin-button primary" type="submit"{auto_apply_disabled}>{auto_apply_label}</button></form>
+        <form id="pluginApplyForm" method="post" action="/plugin"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input id="pluginApplyAction" type="hidden" name="action" value="apply-prepared"><input id="pluginApplyTag" type="hidden" name="expected_tag" value="{html.escape(str(prepared.get('release_tag', '')), quote=True)}"><input id="pluginApplySha" type="hidden" name="expected_sha256" value="{html.escape(str(prepared.get('binary_sha256', '')), quote=True)}"><button id="pluginApplyButton" class="plugin-button primary" type="submit"{auto_apply_disabled}>{auto_apply_label}</button></form>
         <form method="post" action="/plugin" onsubmit="return confirm('确认{auto_toggle_label}？')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="set-auto-update"><input type="hidden" name="value" value="{auto_toggle_value}"><button class="plugin-button" type="submit">{auto_toggle_label.replace('自动更新', 'Release 监控')}</button></form>
         <form method="post" action="/plugin" onsubmit="return confirm('确认回退到最近一份完整配对备份？')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="rollback"><button class="plugin-button danger" type="submit">回退</button></form>
         <form method="post" action="/plugin" onsubmit="return confirm('确认{overdraft_button}并重启 Sub2API？')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="enable-overdraft"><input type="hidden" name="value" value="{overdraft_next}"><button class="plugin-button" type="submit">{overdraft_button}</button></form>
@@ -1409,31 +1467,81 @@ class BackupHandler(BaseHTTPRequestHandler):
       if (workflowUrl) workflowLink.href = workflowUrl;
       document.getElementById('pluginUpdateChecked').textContent = '检测时间：' + (pluginUpdate.checked_at || '尚未检测');
       const pluginAuto = data.plugin_auto_update || {{}};
+      const pluginOperation = data.plugin_operation || {{}};
+      const operationActive = pluginOperation.active === true;
       document.getElementById('pluginAutoEnabled').textContent = pluginAuto.enabled === true ? '已启用' : '已停用';
       document.getElementById('pluginAutoChecked').textContent = pluginAuto.last_checked_at || '尚未运行';
-      const autoLabels = {{ no_update:'无更新', ready:'已下载，等待应用', updated:'已完成更新', restart_pending:'等待健康检查', waiting_builder:'官方已更新，等待仓库编译', build_failed:'GitHub 编译失败，保留旧版', failed:'仓库监控失败，保留旧版', disabled:'已停用', building:'GitHub 正在编译', downloading:'正在下载已验证版本' }};
+      const autoLabels = {{ no_update:'无更新', ready:'已下载，等待应用', apply_queued:'已进入后台应用队列', applying:'正在应用', apply_failed:'应用失败，可重试', updated:'已完成更新', restart_pending:'等待健康检查', rollback_pending:'正在恢复旧版', rolled_back:'候选失败，已恢复旧版', waiting_builder:'官方已更新，等待仓库编译', build_failed:'GitHub 编译失败，保留旧版', failed:'仓库监控失败，保留旧版', disabled:'已停用', building:'GitHub 正在编译', downloading:'正在下载已验证版本' }};
       document.getElementById('pluginAutoResult').textContent = autoLabels[pluginAuto.last_result] || pluginAuto.last_result || pluginAuto.status || '尚未运行';
       document.getElementById('pluginAutoError').textContent = pluginAuto.last_error || '';
       const progress = Math.max(0, Math.min(100, Number(pluginAuto.progress || 0)));
-      document.getElementById('pluginAutoProgressBar').style.width = progress + '%';
+      const progressBar = document.getElementById('pluginAutoProgressBar');
+      progressBar.style.width = progress + '%';
+      progressBar.classList.toggle('failed', pluginAuto.status === 'apply_failed');
+      progressBar.classList.toggle('rolled-back', pluginAuto.status === 'rolled_back');
       document.getElementById('pluginAutoProgressLabel').textContent = Math.round(progress) + '%';
       document.getElementById('pluginAutoStage').textContent = pluginAuto.stage || '尚未开始';
-      const preparedReady = pluginAuto.status === 'ready' && pluginUpdate.official_ahead !== true && pluginAuto.prepared && pluginAuto.prepared.status === 'ready';
       const prepared = pluginAuto.prepared || {{}};
+      const preparedReady = pluginUpdate.official_ahead !== true && ((pluginAuto.status === 'ready' && prepared.status === 'ready') || (pluginAuto.status === 'apply_failed' && ['ready', 'staged'].includes(prepared.status)));
       document.getElementById('pluginAutoPrepared').textContent = prepared.version && prepared.binary_sha256 ? '已验证候选 ' + prepared.version + ' · SHA256 ' + prepared.binary_sha256.slice(0, 16) + '...' : '暂无已验证候选包';
+      document.getElementById('pluginApplyTag').value = prepared.release_tag || '';
+      document.getElementById('pluginApplySha').value = prepared.binary_sha256 || '';
       const applyButton = document.getElementById('pluginApplyButton');
-      const unavailableLabels = {{ waiting_builder:'等待仓库跟进官方版本', building:'仓库编译中', failed:'构建失败，保持旧版', downloading:'正在下载候选包' }};
-      applyButton.disabled = !preparedReady;
-      applyButton.textContent = preparedReady ? '应用已验证版本' : unavailableLabels[pluginAuto.status] || '暂无可应用版本';
+      const unavailableLabels = {{ apply_queued:'应用任务排队中', applying:'正在备份并应用', restart_pending:'正在重启并检查', rollback_pending:'正在自动恢复旧版', rolled_back:'已恢复旧版', apply_failed:'请先执行回退', waiting_builder:'等待仓库跟进官方版本', building:'仓库编译中', failed:'构建失败，保持旧版', downloading:'正在下载候选包' }};
+      applyButton.disabled = operationActive || !preparedReady;
+      applyButton.textContent = preparedReady && !operationActive ? (pluginAuto.status === 'apply_failed' ? '重新应用已验证版本' : '应用已验证版本') : unavailableLabels[pluginAuto.status] || '暂无可应用版本';
+      pluginOperationActive = operationActive;
     }}
+    let pluginOperationActive = {str(auto_active).lower()};
+    let serverRefreshRunning = false;
+    let serverRefreshTimer = null;
     async function refreshServerStatus() {{
+      if (serverRefreshRunning) return;
+      serverRefreshRunning = true;
+      let delay = pluginOperationActive ? 1000 : 30000;
       try {{
         const response = await fetch('/api/server-status', {{ cache: 'no-store' }});
         if (response.ok) updateServerStatus(await response.json());
-      }} catch (_) {{}}
+        delay = pluginOperationActive ? 1000 : 30000;
+      }} catch (_) {{
+        delay = pluginOperationActive ? 2000 : 10000;
+      }} finally {{
+        serverRefreshRunning = false;
+        clearTimeout(serverRefreshTimer);
+        serverRefreshTimer = setTimeout(refreshServerStatus, delay);
+      }}
     }}
+    const applyForm = document.getElementById('pluginApplyForm');
+    applyForm.addEventListener('submit', async event => {{
+      event.preventDefault();
+      if (!confirm({json.dumps(auto_apply_confirm, ensure_ascii=False)})) return;
+      const applyButton = document.getElementById('pluginApplyButton');
+      applyButton.disabled = true;
+      applyButton.textContent = '正在启动后台任务';
+      document.getElementById('pluginAutoError').textContent = '';
+      try {{
+        const response = await fetch('/plugin', {{
+          method: 'POST',
+          headers: {{ Accept: 'application/json' }},
+          body: new FormData(applyForm),
+        }});
+        const result = await response.json();
+        if (!response.ok || result.ok !== true) throw new Error(result.message || '后台应用任务启动失败');
+        pluginOperationActive = true;
+        document.getElementById('pluginAutoResult').textContent = '已进入后台应用队列';
+        document.getElementById('pluginAutoStage').textContent = result.message || '正在执行完整备份';
+        document.getElementById('pluginAutoProgressBar').style.width = '1%';
+        document.getElementById('pluginAutoProgressLabel').textContent = '1%';
+        await refreshServerStatus();
+      }} catch (error) {{
+        pluginOperationActive = false;
+        applyButton.disabled = false;
+        applyButton.textContent = '重新应用已验证版本';
+        document.getElementById('pluginAutoError').textContent = error instanceof Error ? error.message : '后台应用任务启动失败';
+      }}
+    }});
     setInterval(refreshIpStatus, 60000);
-    setInterval(refreshServerStatus, 30000);
+    serverRefreshTimer = setTimeout(refreshServerStatus, pluginOperationActive ? 500 : 30000);
   </script>
 </body>
 </html>"""

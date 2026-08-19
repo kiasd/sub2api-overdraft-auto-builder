@@ -1,0 +1,10 @@
+[Unit]
+Description=Record a failed Sub2API Release application
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sub2api-plugin-control apply-worker-failed
+NoNewPrivileges=false
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sub2api-weekly-overdraft
+ReadOnlyPaths=/opt/sub2api /etc/sub2api

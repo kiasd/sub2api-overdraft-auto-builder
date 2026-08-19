@@ -1,0 +1,16 @@
+[Unit]
+Description=Apply a user-approved verified Sub2API Release
+Wants=network-online.target
+After=network-online.target postgresql.service redis-server.service
+ConditionPathExists=/usr/local/sbin/sub2api-plugin-control
+OnFailure=sub2api-overdraft-apply-failed.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sub2api-plugin-control apply-queued
+TimeoutStartSec=infinity
+NoNewPrivileges=false
+ProtectSystem=strict
+ReadWritePaths=/opt/sub2api /var/lib/sub2api-weekly-overdraft
+ReadOnlyPaths=/etc/sub2api
+PrivateTmp=true

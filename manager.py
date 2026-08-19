@@ -63,6 +63,12 @@ FUSION_RELEASE_TAG_RE = re.compile(
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 AUTO_UPDATE_DEFAULT_MIN_HOURS = 3
 AUTO_UPDATE_DEFAULT_MAX_HOURS = 5
+APPLY_ACTIVE_STATUSES = {
+    "apply_queued",
+    "applying",
+    "restart_pending",
+    "rollback_pending",
+}
 PATCH_BASE_COMMITS = {
     "0.1.177": "baeac1f3de21d37b129405f092ef86c24b3f203d",
     "0.1.178": "e0c48a19ed794a565e3858662520afe0a1f9f0ba",
@@ -130,6 +136,13 @@ def write_auto_update_status(**updates: Any) -> dict[str, Any]:
     value.update(updates)
     write_json_atomic(auto_update_path(), value)
     return value
+
+
+def binary_hash(path: Path | None = None) -> str:
+    candidate = path or binary_path()
+    if not candidate.is_file():
+        return ""
+    return sha256_file(candidate)
 
 
 def set_auto_update(enabled: bool) -> dict[str, Any]:
@@ -273,22 +286,35 @@ def manager_lock() -> Any:
     root = state_root()
     root.mkdir(parents=True, exist_ok=True)
     lock_path = root / "manager.lock"
+    timeout = max(1, int(os.environ.get("SUB2API_MANAGER_LOCK_TIMEOUT_SECONDS", "120")))
+    deadline = time.monotonic() + timeout
     with lock_path.open("a+", encoding="utf-8") as handle:
         if fcntl is not None:
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as exc:
+                    if time.monotonic() >= deadline:
+                        raise ManagerError("timed out waiting for another patch-manager operation") from exc
+                    time.sleep(0.2)
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise ManagerError("another patch-manager operation is running") from exc
-            yield
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         else:
             handle.seek(0)
             handle.write("0")
             handle.flush()
-            handle.seek(0)
-            try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError as exc:
-                raise ManagerError("another patch-manager operation is running") from exc
+            while True:
+                handle.seek(0)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as exc:
+                    if time.monotonic() >= deadline:
+                        raise ManagerError("timed out waiting for another patch-manager operation") from exc
+                    time.sleep(0.2)
             try:
                 yield
             finally:
@@ -1438,20 +1464,42 @@ def choose_backup(target: str) -> dict[str, Any]:
     raise ManagerError(f"no paired backup can restore version {version}")
 
 
-def stage_rollback(target: str) -> dict[str, Any]:
-    backup = choose_backup(target)
+def stage_rollback(
+    target: str,
+    reason: str = "manual",
+    backup_id: str = "",
+) -> dict[str, Any]:
+    if backup_id:
+        backup = next(
+            (
+                item
+                for item in list_backups()
+                if item.get("status") == "ready" and item.get("backup_id") == backup_id
+            ),
+            None,
+        )
+        if backup is None:
+            raise ManagerError(f"paired backup is not ready: {backup_id}")
+    else:
+        backup = choose_backup(target)
     directory = Path(str(backup["directory"]))
     binary = directory / "sub2api"
     dump = directory / "database.dump"
     if not binary.is_file() or not dump.is_file():
         raise ManagerError(f"backup is incomplete: {directory}")
-    atomic_replace_binary(binary)
+    expected_binary_hash = str(backup.get("binary_sha256", "")) or sha256_file(binary)
+    if sha256_file(binary) != expected_binary_hash:
+        raise ManagerError(f"backup binary checksum mismatch: {directory}")
     pending = {
         "backup_id": backup["backup_id"],
         "target_version": backup["from_version"],
         "target_commit": backup.get("from_commit", "unknown"),
         "target_channel": backup.get("from_channel", channel_for_version(str(backup["from_version"]))),
+        "binary_backup": str(binary),
+        "binary_sha256": expected_binary_hash,
         "database_dump": str(dump),
+        "reason": reason,
+        "phase": "rollback_pending",
         "staged_at": now_utc(),
     }
     write_json_atomic(state_root() / "pending-rollback.json", pending)
@@ -1466,6 +1514,13 @@ def stage_rollback(target: str) -> dict[str, Any]:
             "status": "rollback_staged",
             "backup_id": backup["backup_id"],
         },
+    )
+    write_auto_update_status(
+        status="rollback_pending",
+        last_result="rollback_pending",
+        progress=95,
+        stage="已锁定配对备份，正在恢复上一版程序和数据库",
+        last_error="",
     )
     return {"status": "rollback_staged", "version": backup["from_version"], "backup_id": backup["backup_id"]}
 
@@ -1496,6 +1551,17 @@ def apply_pending() -> dict[str, Any]:
     pending = read_json(pending_path)
     if not pending:
         return {"status": "nothing_pending"}
+    backup_binary_value = str(pending.get("binary_backup", ""))
+    if backup_binary_value:
+        backup_binary = Path(backup_binary_value)
+        expected_hash = str(pending.get("binary_sha256", ""))
+        if not backup_binary.is_file():
+            raise ManagerError(f"rollback binary does not exist: {backup_binary}")
+        if expected_hash and sha256_file(backup_binary) != expected_hash:
+            raise ManagerError(f"rollback binary checksum mismatch: {backup_binary}")
+        atomic_replace_binary(backup_binary)
+        pending["phase"] = "binary_restored"
+        write_json_atomic(pending_path, pending)
     restore_database(Path(str(pending["database_dump"])))
     pending["status"] = "applied"
     pending["applied_at"] = now_utc()
@@ -1510,6 +1576,17 @@ def apply_pending() -> dict[str, Any]:
             "status": "rolled_back",
             "backup_id": pending["backup_id"],
         },
+    )
+    automatic = str(pending.get("reason", "manual")) != "manual"
+    write_auto_update_status(
+        status="rolled_back",
+        last_result="rolled_back",
+        progress=100,
+        stage="候选版本未通过检查，已自动恢复旧版" if automatic else "已恢复上一版程序和数据库",
+        last_error="候选版本未通过检查，程序和数据库已恢复" if automatic else "",
+        prepared={},
+        apply_request={},
+        finished_at=now_utc(),
     )
     return {"status": "rollback_applied", "version": pending["target_version"]}
 
@@ -1534,6 +1611,47 @@ def post_start_check() -> dict[str, Any]:
     pending = read_json(pending_path)
     if not pending:
         return {"status": "nothing_pending"}
+    target_hash = str(pending.get("target_binary_sha256", ""))
+    if target_hash:
+        actual_hash = binary_hash()
+        if actual_hash != target_hash:
+            old_hash = str(pending.get("old_binary_sha256", ""))
+            if (
+                pending.get("phase") == "switch_pending"
+                and old_hash
+                and actual_hash == old_hash
+            ):
+                pending_path.unlink()
+                prepared = prepared_update()
+                if prepared.get("status") == "staged":
+                    prepared["status"] = "ready"
+                    write_json_atomic(prepared_update_path(), prepared)
+                write_auto_update_status(
+                    status="apply_failed",
+                    last_result="apply_failed",
+                    progress=65,
+                    stage="候选程序未写入磁盘，已继续运行旧版",
+                    last_error="重启前校验发现候选程序切换未完成",
+                    prepared=prepared,
+                    finished_at=now_utc(),
+                )
+                return {"status": "switch_not_applied", "version": pending["from_version"]}
+            result = stage_rollback(
+                str(pending["from_version"]),
+                reason="binary_mismatch",
+                backup_id=str(pending.get("backup_id", "")),
+            )
+            raise ManagerError(
+                "installed binary does not match the pending upgrade; "
+                f"automatic rollback staged: {result}"
+            )
+    write_auto_update_status(
+        status="applying",
+        last_result="applying",
+        progress=90,
+        stage="服务已重启，正在执行健康检查",
+        last_error="",
+    )
     if health_check():
         pending["status"] = "verified"
         pending["verified_at"] = now_utc()
@@ -1553,9 +1671,30 @@ def post_start_check() -> dict[str, Any]:
                 "status": "verified",
             },
         )
+        write_auto_update_status(
+            status="updated",
+            last_result="updated",
+            progress=100,
+            stage="更新已应用并通过健康检查",
+            last_error="",
+            prepared={},
+            apply_request={},
+            finished_at=now_utc(),
+        )
         return {"status": "verified", "version": pending["to_version"]}
 
-    result = stage_rollback(str(pending["from_version"]))
+    result = stage_rollback(
+        str(pending["from_version"]),
+        reason="health_check_failed",
+        backup_id=str(pending.get("backup_id", "")),
+    )
+    write_auto_update_status(
+        status="rollback_pending",
+        last_result="rollback_pending",
+        progress=95,
+        stage="健康检查失败，正在自动恢复旧版",
+        last_error=f"候选 v{pending['to_version']} 未通过健康检查",
+    )
     raise ManagerError(
         f"candidate v{pending['to_version']} failed health checks; automatic rollback staged: {result}"
     )
@@ -1844,71 +1983,360 @@ def prepare_candidate(
             shutil.rmtree(work, ignore_errors=True)
 
 
-def apply_prepared() -> dict[str, Any]:
+def validate_prepared_identity(
+    prepared: dict[str, Any],
+    expected_tag: str = "",
+    expected_hash: str = "",
+) -> tuple[str, str]:
+    tag = expected_tag.strip()
+    digest = expected_hash.strip().lower()
+    if tag and not FUSION_RELEASE_TAG_RE.fullmatch(tag):
+        raise ManagerError("等待应用的 Release 标签格式无效")
+    if digest and not SHA256_RE.fullmatch(digest):
+        raise ManagerError("等待应用的候选包 SHA-256 格式无效")
+    prepared_tag = str(prepared.get("release_tag", ""))
+    prepared_hash = str(prepared.get("binary_sha256", "")).lower()
+    if tag and prepared_tag != tag:
+        raise ManagerError("等待应用的候选包已变化，请刷新页面后重新确认")
+    if digest and prepared_hash != digest:
+        raise ManagerError("等待应用的候选包校验值已变化，请刷新页面后重新确认")
+    return tag or prepared_tag, digest or prepared_hash
+
+
+def queue_prepared_apply(expected_tag: str, expected_hash: str) -> dict[str, Any]:
     prepared = prepared_update()
-    if prepared.get("status") != "ready":
+    pending_upgrade = read_json(state_root() / "pending-upgrade.json", {})
+    if not isinstance(pending_upgrade, dict):
+        pending_upgrade = {}
+    prepared_status = str(prepared.get("status", ""))
+    if prepared_status != "ready" and not (
+        prepared_status == "staged" and pending_upgrade
+    ):
         raise ManagerError("当前没有等待应用的编译包")
+    tag, digest = validate_prepared_identity(prepared, expected_tag, expected_hash)
+    if not tag or not digest:
+        raise ManagerError("等待应用的候选包缺少不可变版本标识")
     artifact = Path(str(prepared.get("artifact", "")))
-    if not artifact.is_file():
-        raise ManagerError("等待应用的编译包文件不存在")
-    expected_hash = str(prepared.get("binary_sha256", ""))
-    if expected_hash and sha256_file(artifact) != expected_hash:
-        raise ManagerError("等待应用的编译包校验失败")
-    if read_json(state_root() / "pending-upgrade.json", {}):
-        raise ManagerError("已有升级正在等待健康检查完成")
+    if not artifact.is_file() or sha256_file(artifact) != digest:
+        raise ManagerError("等待应用的编译包文件校验失败")
+    existing = auto_update_status()
+    if str(existing.get("status", "")) in APPLY_ACTIVE_STATUSES:
+        raise ManagerError("已有版本应用任务正在执行")
+    if pending_upgrade:
+        if (
+            str(pending_upgrade.get("release_tag", "")) != tag
+            or str(pending_upgrade.get("target_binary_sha256", "")).lower()
+            != digest
+            or str(pending_upgrade.get("to_version", ""))
+            != str(prepared.get("version", ""))
+            or str(pending_upgrade.get("phase", ""))
+            not in {"switch_pending", "switched"}
+        ):
+            raise ManagerError("已有其他升级正在等待健康检查完成")
     if read_json(state_root() / "pending-rollback.json", {}):
         raise ManagerError("已有回退正在等待应用完成")
+    requested_at = now_utc()
+    request = {
+        "operation_id": f"{dt.datetime.now().strftime('%Y%m%dT%H%M%S%f')}-{digest[:12]}",
+        "release_tag": tag,
+        "binary_sha256": digest,
+        "requested_at": requested_at,
+        "resume_pending": bool(pending_upgrade),
+    }
+    write_auto_update_status(
+        status="apply_queued",
+        last_result="apply_queued",
+        progress=1,
+        stage="应用任务已进入后台队列",
+        last_error="",
+        prepared=prepared,
+        apply_request=request,
+        last_started_at=requested_at,
+        finished_at="",
+    )
+    return {"status": "apply_queued", "apply_request": request}
 
-    installed_build = current_build()
-    installed = installed_build["version"]
-    installed_commit = installed_build.get("commit", "unknown")
-    current_state = read_json(state_root() / "current.json", {})
-    installed_channel = str(current_state.get("channel", channel_for_version(installed))) if isinstance(current_state, dict) else channel_for_version(installed)
-    target = normalize_version(str(prepared["version"]))
-    selected = validate_channel(str(prepared.get("channel", "overdraft")))
-    if version_key(target) < version_key(installed):
-        raise ManagerError(
-            f"编译包版本 {target} 低于当前运行版本 {installed}，请重新检查更新或使用回退"
-        )
-    backup_id, backup_dir, backup_meta = create_backup(installed, target, installed_commit, installed_channel, selected)
+
+def persist_switched_upgrade(
+    prepared: dict[str, Any],
+    pending: dict[str, Any],
+) -> dict[str, Any]:
+    target = str(pending["to_version"])
+    selected = str(pending["channel"])
+    staged = dict(prepared)
+    staged.update(
+        {
+            "status": "staged",
+            "from_version": pending["from_version"],
+            "from_channel": pending["from_channel"],
+            "backup_id": pending["backup_id"],
+            "staged_at": pending["staged_at"],
+        }
+    )
+    pending = dict(pending)
+    pending["phase"] = "switched"
+    pending["switched_at"] = now_utc()
+    write_json_atomic(state_root() / "pending-upgrade.json", pending)
+    write_json_atomic(prepared_update_path(), staged)
+    write_json_atomic(patch_state_path(target, selected), staged)
+    write_json_atomic(
+        state_root() / "current.json",
+        {
+            "version": target,
+            "commit": prepared.get("source_commit", "unknown"),
+            "channel": selected,
+            "status": "staged",
+        },
+    )
+    write_auto_update_status(
+        status="applying",
+        last_result="applying",
+        progress=75,
+        stage="候选程序已切换，等待重启服务",
+        last_error="",
+        prepared=staged,
+    )
+    return {
+        "status": "staged",
+        "version": target,
+        "commit": prepared.get("source_commit", "unknown"),
+        "backup_id": pending["backup_id"],
+    }
+
+
+def resume_switched_upgrade(
+    prepared: dict[str, Any],
+    pending: dict[str, Any],
+    expected_tag: str,
+    expected_hash: str,
+) -> dict[str, Any] | None:
+    pending_tag = str(pending.get("release_tag", ""))
+    target_hash = str(pending.get("target_binary_sha256", ""))
+    old_hash = str(pending.get("old_binary_sha256", ""))
+    if expected_tag and pending_tag and expected_tag != pending_tag:
+        raise ManagerError("待恢复升级与用户确认的 Release 不一致")
+    if expected_hash and target_hash and expected_hash != target_hash:
+        raise ManagerError("待恢复升级与用户确认的候选包不一致")
+    if not target_hash:
+        raise ManagerError("已有升级正在等待健康检查完成")
+    actual_hash = binary_hash()
+    if actual_hash == target_hash:
+        return persist_switched_upgrade(prepared, pending)
+    if pending.get("phase") == "switch_pending" and old_hash and actual_hash == old_hash:
+        (state_root() / "pending-upgrade.json").unlink()
+        return None
+    raise ManagerError("磁盘程序与升级事务中的新旧校验值均不一致，已停止自动操作")
+
+
+def apply_prepared(expected_tag: str = "", expected_hash: str = "") -> dict[str, Any]:
+    prepared = prepared_update()
+    pending_path = state_root() / "pending-upgrade.json"
+    pending: dict[str, Any] = {}
+    old_hash = ""
+    target_hash = ""
     try:
+        request = auto_update_status().get("apply_request", {})
+        if not isinstance(request, dict):
+            request = {}
+        expected_tag = expected_tag or str(request.get("release_tag", ""))
+        expected_hash = expected_hash or str(request.get("binary_sha256", ""))
+        expected_tag, expected_hash = validate_prepared_identity(
+            prepared, expected_tag, expected_hash
+        )
+        existing_pending = read_json(pending_path, {})
+        if isinstance(existing_pending, dict) and existing_pending:
+            resumed = resume_switched_upgrade(
+                prepared, existing_pending, expected_tag, expected_hash
+            )
+            if resumed is not None:
+                return resumed
+
+        write_auto_update_status(
+            status="applying",
+            last_result="applying",
+            progress=5,
+            stage="正在校验已验证候选包",
+            last_error="",
+            prepared=prepared,
+            last_started_at=now_utc(),
+        )
+        if prepared.get("status") != "ready":
+            raise ManagerError("当前没有等待应用的编译包")
+        artifact = Path(str(prepared.get("artifact", "")))
+        if not artifact.is_file():
+            raise ManagerError("等待应用的编译包文件不存在")
+        target_hash = str(prepared.get("binary_sha256", "")).lower()
+        if not SHA256_RE.fullmatch(target_hash) or sha256_file(artifact) != target_hash:
+            raise ManagerError("等待应用的编译包校验失败")
+        if read_json(state_root() / "pending-rollback.json", {}):
+            raise ManagerError("已有回退正在等待应用完成")
+
+        installed_build = current_build()
+        installed = installed_build["version"]
+        installed_commit = installed_build.get("commit", "unknown")
+        current_state = read_json(state_root() / "current.json", {})
+        installed_channel = str(current_state.get("channel", channel_for_version(installed))) if isinstance(current_state, dict) else channel_for_version(installed)
+        target = normalize_version(str(prepared["version"]))
+        selected = validate_channel(str(prepared.get("channel", "overdraft")))
+        if version_key(target) < version_key(installed):
+            raise ManagerError(
+                f"编译包版本 {target} 低于当前运行版本 {installed}，请重新检查更新或使用回退"
+            )
+        write_auto_update_status(
+            status="applying",
+            last_result="applying",
+            progress=15,
+            stage="正在全量备份程序、配置和数据库",
+            prepared=prepared,
+        )
+        backup_id, backup_dir, backup_meta = create_backup(
+            installed,
+            target,
+            installed_commit,
+            installed_channel,
+            selected,
+        )
+        write_auto_update_status(
+            status="applying",
+            last_result="applying",
+            progress=45,
+            stage="正在生成切换前数据库恢复点",
+            prepared=prepared,
+        )
         # Compatibility was checked against a cloned database before the package
         # was marked ready; this fresh dump is the switch-time recovery point.
         finalize_database_backup(backup_dir, backup_meta)
-        atomic_replace_binary(artifact)
-        staged = dict(prepared)
-        staged.update({
-            "status": "staged",
+        old_hash = binary_hash() or str(backup_meta.get("binary_sha256", ""))
+        pending = {
+            "operation_id": str(request.get("operation_id", "")),
+            "backup_id": backup_id,
             "from_version": installed,
             "from_channel": installed_channel,
-            "backup_id": backup_id,
+            "to_version": target,
+            "channel": selected,
+            "source_commit": str(prepared.get("source_commit", "unknown")),
+            "release_tag": expected_tag,
+            "old_binary_sha256": old_hash,
+            "target_binary_sha256": target_hash,
+            "phase": "switch_pending",
             "staged_at": now_utc(),
-        })
-        write_json_atomic(prepared_update_path(), staged)
-        write_json_atomic(patch_state_path(target, selected), staged)
-        write_json_atomic(
-            state_root() / "pending-upgrade.json",
-            {
-                "backup_id": backup_id,
-                "from_version": installed,
-                "to_version": target,
-                "channel": selected,
-                "source_commit": str(prepared.get("source_commit", "unknown")),
-                "staged_at": now_utc(),
-            },
+        }
+        write_json_atomic(pending_path, pending)
+        write_auto_update_status(
+            status="applying",
+            last_result="applying",
+            progress=65,
+            stage="备份已完成，正在原子切换候选程序",
+            prepared=prepared,
         )
-        write_json_atomic(
-            state_root() / "current.json",
-            {"version": target, "commit": prepared.get("source_commit", "unknown"), "channel": selected, "status": "staged"},
+        atomic_replace_binary(artifact)
+        return persist_switched_upgrade(prepared, pending)
+    except Exception as exc:
+        actual_hash = binary_hash()
+        if pending and target_hash and actual_hash == target_hash:
+            try:
+                return persist_switched_upgrade(prepared, pending)
+            except Exception:
+                pass
+        unchanged = bool(old_hash and actual_hash == old_hash)
+        if pending and unchanged:
+            with contextlib.suppress(FileNotFoundError):
+                pending_path.unlink()
+        stage = (
+            "应用失败，候选包仍可重试，当前程序未切换"
+            if not pending or unchanged
+            else "应用中断，磁盘程序状态不明确，已停止自动操作"
         )
-        return {"status": "staged", "version": target, "commit": prepared.get("source_commit", "unknown"), "backup_id": backup_id}
-    except Exception:
+        with contextlib.suppress(Exception):
+            current_progress = int(auto_update_status().get("progress", 0) or 0)
+            write_auto_update_status(
+                status="apply_failed",
+                last_result="apply_failed",
+                progress=max(0, min(100, current_progress)),
+                stage=stage,
+                last_error=str(exc)[:1000],
+                prepared=prepared_update(),
+                finished_at=now_utc(),
+            )
         raise
+
+
+def auto_apply_restart() -> dict[str, Any]:
+    value = write_auto_update_status(
+        status="applying",
+        last_result="applying",
+        progress=80,
+        stage="正在重启 Sub2API 服务",
+        last_error="",
+    )
+    return {"status": "applying", "auto_update": value}
+
+
+def apply_start_failed() -> dict[str, Any]:
+    existing = auto_update_status()
+    if str(existing.get("status", "")) != "apply_queued":
+        return existing | {"status": str(existing.get("status", "unknown"))}
+    return write_auto_update_status(
+        status="apply_failed",
+        last_result="apply_failed",
+        progress=1,
+        stage="后台应用任务启动失败，候选包仍可重试",
+        last_error="systemd 未能启动独立应用任务",
+        prepared=prepared_update(),
+        finished_at=now_utc(),
+    ) | {"status": "apply_failed"}
+
+
+def apply_worker_failed(reason: str = "后台应用任务异常停止") -> dict[str, Any]:
+    existing = auto_update_status()
+    if str(existing.get("status", "")) not in APPLY_ACTIVE_STATUSES:
+        return existing
+    pending_upgrade = read_json(state_root() / "pending-upgrade.json", {})
+    pending_rollback = read_json(state_root() / "pending-rollback.json", {})
+    if pending_rollback:
+        stage = "后台任务中断，配对回退事务已保留，可重新执行回退"
+    elif pending_upgrade:
+        stage = "后台任务在切换后中断，可重新应用继续事务，或执行回退"
+    else:
+        stage = "后台任务中断，候选包仍可重新应用"
+    return write_auto_update_status(
+        status="apply_failed",
+        last_result="apply_failed",
+        progress=max(0, min(100, int(existing.get("progress", 0) or 0))),
+        stage=stage,
+        last_error=reason[:1000],
+        prepared={} if pending_rollback else prepared_update(),
+        finished_at=now_utc(),
+    )
+
+
+def reconcile_apply_status() -> dict[str, Any]:
+    existing = auto_update_status()
+    if str(existing.get("status", "")) not in APPLY_ACTIVE_STATUSES:
+        return {"status": "ok", "auto_update": existing}
+    started_value = str(existing.get("last_started_at", ""))
+    try:
+        started = dt.datetime.fromisoformat(started_value)
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=dt.timezone.utc)
+        age = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
+    except (TypeError, ValueError):
+        age = 31
+    if age <= 30:
+        return {"status": "ok", "auto_update": existing}
+    failed = apply_worker_failed("systemd 应用任务已停止，但未记录完成结果")
+    return {"status": "ok", "auto_update": failed}
 
 
 def auto_run() -> dict[str, Any]:
     """Monitor the builder and stage a verified Release without local compilation."""
     existing = auto_update_status()
+    if (
+        str(existing.get("status", "")) in APPLY_ACTIVE_STATUSES
+        or bool(read_json(state_root() / "pending-upgrade.json", {}))
+        or bool(read_json(state_root() / "pending-rollback.json", {}))
+    ):
+        return existing | {"busy": True, "reason": "apply_in_progress"}
     if not bool(existing.get("enabled", True)):
         return write_auto_update_status(
             status="disabled",
@@ -2035,13 +2463,16 @@ def auto_run() -> dict[str, Any]:
 
 def auto_finish() -> dict[str, Any]:
     """Record the result after a user-approved candidate application."""
+    existing = auto_update_status()
+    if str(existing.get("status", "")) in {"updated", "rolled_back", "apply_failed"}:
+        return existing
     pending = read_json(state_root() / "pending-upgrade.json", {})
     current = read_json(state_root() / "current.json", {})
     if pending:
         return write_auto_update_status(
             status="restart_pending",
             last_result="restart_pending",
-            progress=100,
+            progress=90,
             stage="等待应用后的健康检查",
             last_error="Sub2API 重启后的健康检查仍在等待",
             finished_at=now_utc(),
@@ -2125,6 +2556,14 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser("auto-status")
     subparsers.add_parser("auto-run")
     subparsers.add_parser("auto-finish")
+    subparsers.add_parser("auto-apply-restart")
+    subparsers.add_parser("apply-start-failed")
+    worker_failed_parser = subparsers.add_parser("apply-worker-failed")
+    worker_failed_parser.add_argument("reason", nargs="?", default="后台应用任务异常停止")
+    subparsers.add_parser("reconcile-apply-status")
+    queue_parser = subparsers.add_parser("queue-apply")
+    queue_parser.add_argument("release_tag")
+    queue_parser.add_argument("binary_sha256")
     subparsers.add_parser("apply-prepared")
     upgrade_parser = subparsers.add_parser("upgrade")
     upgrade_parser.add_argument("version", nargs="?")
@@ -2139,6 +2578,8 @@ def parse_args() -> argparse.Namespace:
     switch_parser.add_argument("version", nargs="?")
     rollback_parser = subparsers.add_parser("rollback")
     rollback_parser.add_argument("version", nargs="?", default="previous")
+    rollback_parser.add_argument("--reason", default="manual")
+    rollback_parser.add_argument("--backup-id", default="")
     subparsers.add_parser("apply-pending")
     subparsers.add_parser("post-start-check")
     enable_parser = subparsers.add_parser("enable-overdraft")
@@ -2164,6 +2605,16 @@ def main() -> int:
                 return auto_run()
             elif args.command == "auto-finish":
                 return auto_finish()
+            elif args.command == "auto-apply-restart":
+                return auto_apply_restart()
+            elif args.command == "apply-start-failed":
+                return apply_start_failed()
+            elif args.command == "apply-worker-failed":
+                return apply_worker_failed(args.reason)
+            elif args.command == "reconcile-apply-status":
+                return reconcile_apply_status()
+            elif args.command == "queue-apply":
+                return queue_prepared_apply(args.release_tag, args.binary_sha256)
             elif args.command == "apply-prepared":
                 return apply_prepared()
             elif args.command == "upgrade":
@@ -2173,7 +2624,7 @@ def main() -> int:
             elif args.command == "verify":
                 return verify(args.version, args.source_archive, args.channel)
             elif args.command == "rollback":
-                return stage_rollback(args.version)
+                return stage_rollback(args.version, args.reason, args.backup_id)
             elif args.command == "apply-pending":
                 return apply_pending()
             elif args.command == "post-start-check":

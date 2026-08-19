@@ -14,6 +14,7 @@ DROPIN_DIR="/etc/systemd/system/sub2api.service.d"
 
 install -d -m 0750 -o sub2api -g sub2api "$PLUGIN_DIR" "$STATE_DIR"
 cp -a "$SOURCE_DIR/." "$PLUGIN_DIR/"
+chmod 0750 "$PLUGIN_DIR"
 chmod 0750 "$PLUGIN_DIR/manager.sh" "$PLUGIN_DIR/manager.py" "$PLUGIN_DIR/auto_update.py" "$PLUGIN_DIR/release_monitor.py"
 chown -R sub2api:sub2api "$PLUGIN_DIR" "$STATE_DIR"
 
@@ -36,6 +37,8 @@ install -d -m 0755 "$DROPIN_DIR"
 install -m 0644 "$SOURCE_DIR/systemd/weekly-overdraft-manager.conf" "$DROPIN_DIR/weekly-overdraft-manager.conf"
 install -m 0644 "$SOURCE_DIR/systemd/sub2api-overdraft-auto-update.service" /etc/systemd/system/sub2api-overdraft-auto-update.service
 install -m 0644 "$SOURCE_DIR/systemd/sub2api-overdraft-auto-update.timer" /etc/systemd/system/sub2api-overdraft-auto-update.timer
+install -m 0644 "$SOURCE_DIR/systemd/sub2api-overdraft-apply.service" /etc/systemd/system/sub2api-overdraft-apply.service
+install -m 0644 "$SOURCE_DIR/systemd/sub2api-overdraft-apply-failed.service" /etc/systemd/system/sub2api-overdraft-apply-failed.service
 systemctl daemon-reload
 systemctl enable --now sub2api-overdraft-auto-update.timer
 
