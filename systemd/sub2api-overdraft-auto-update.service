@@ -1,13 +1,13 @@
 [Unit]
-Description=Sub2API native overdraft automatic update worker
+Description=Monitor and stage a verified Sub2API GitHub Release
 Wants=network-online.target
 After=network-online.target sub2api.service
-ConditionPathExists=/opt/sub2api/plugins/weekly-overdraft/auto_update.py
+ConditionPathExists=/opt/sub2api/plugins/weekly-overdraft/release_monitor.py
 
 [Service]
 Type=oneshot
 User=root
-ExecStart=/opt/sub2api/plugins/weekly-overdraft/auto_update.py
+ExecStart=/opt/sub2api/plugins/weekly-overdraft/release_monitor.py
 EnvironmentFile=-/etc/sub2api/weekly-overdraft-manager.env
-TimeoutStartSec=10800
+TimeoutStartSec=900
 NoNewPrivileges=false

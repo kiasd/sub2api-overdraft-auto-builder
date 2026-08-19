@@ -17,6 +17,43 @@ SPEC.loader.exec_module(manager)
 
 
 class ManagerTests(unittest.TestCase):
+    @staticmethod
+    def release_check(
+        *,
+        has_update=True,
+        official_ahead=False,
+        workflow_status="completed",
+        workflow_conclusion="success",
+        payload=b"candidate",
+    ):
+        digest = manager.hashlib.sha256(payload).hexdigest()
+        return {
+            "current_version": "0.1.178-overdraft.1",
+            "current_channel": "overdraft",
+            "has_update": has_update,
+            "official_ahead": official_ahead,
+            "official": {
+                "version": "0.1.179" if official_ahead else "0.1.178",
+                "html_url": "https://github.com/Wei-Shaw/sub2api/releases/latest",
+            },
+            "workflow": {
+                "status": workflow_status,
+                "conclusion": workflow_conclusion,
+                "failed": workflow_status == "completed" and workflow_conclusion not in {"success", "skipped"},
+                "html_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/1",
+            },
+            "release": {
+                "version": "0.1.178-overdraft.1",
+                "tag": "fusion-v0.1.178-overdraft.1-e0c48a19-45e40b4f-u0bbd2518",
+                "source_commit": "a" * 40,
+                "official_version": "0.1.178",
+                "binary_sha256": digest,
+                "binary_size": len(payload),
+                "binary_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/releases/download/test/sub2api",
+                "html_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/releases/tag/test",
+            },
+        }
+
     def test_normalize_version(self):
         self.assertEqual(manager.normalize_version("v0.1.177"), "0.1.177")
         self.assertEqual(
@@ -299,83 +336,164 @@ class ManagerTests(unittest.TestCase):
                 check.assert_not_called()
                 upgrade.assert_not_called()
 
-    def test_auto_update_no_update_does_not_build(self):
+    def test_auto_update_no_update_does_not_download_or_build(self):
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
-                result = {
-                    "current_version": "0.1.178",
-                    "current_channel": "overdraft",
-                    "channels": {
-                        "official": {"version": "0.1.178", "commit": "a" * 40, "has_update": False},
-                        "overdraft": {
-                            "version": "0.1.178",
-                            "commit": "a" * 40,
-                            "has_update": False,
-                            "patch_available": True,
-                            "patch_sha256": "b" * 64,
-                            "fork_source": {"commit": "c" * 40},
-                        },
-                    },
-                }
-                with mock.patch.object(manager, "check_update", return_value=result), mock.patch.object(manager, "upgrade") as upgrade:
+                result = self.release_check(has_update=False)
+                with mock.patch.object(manager, "check_update", return_value=result), \
+                    mock.patch.object(manager, "prepare_release_candidate") as download, \
+                    mock.patch.object(manager, "prepare_candidate") as local_build:
                     output = manager.auto_run()
                 self.assertEqual(output["status"], "no_update")
-                upgrade.assert_not_called()
+                download.assert_not_called()
+                local_build.assert_not_called()
 
-    def test_auto_update_blocks_when_patch_is_unavailable(self):
+    def test_auto_update_waits_when_official_release_is_ahead(self):
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
-                result = {
-                    "channels": {
-                        "overdraft": {
-                            "version": "0.1.179",
-                            "commit": "a" * 40,
-                            "has_update": True,
-                            "patch_available": False,
-                            "patch_error": "no compatible patch",
-                        }
-                    }
-                }
-                with mock.patch.object(manager, "check_update", return_value=result), mock.patch.object(manager, "upgrade") as upgrade:
+                result = self.release_check(official_ahead=True)
+                with mock.patch.object(manager, "check_update", return_value=result), \
+                    mock.patch.object(manager, "prepare_release_candidate") as download, \
+                    mock.patch.object(manager, "prepare_candidate") as local_build:
                     output = manager.auto_run()
-                self.assertEqual(output["status"], "blocked")
-                self.assertEqual(output["reason"], "patch_unavailable")
-                upgrade.assert_not_called()
+                self.assertEqual(output["status"], "waiting_builder")
+                self.assertIn("官方 0.1.179", output["stage"])
+                download.assert_not_called()
+                local_build.assert_not_called()
 
-    def test_auto_update_prepares_build_when_patch_changes(self):
+    def test_auto_update_reports_builder_in_progress(self):
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
-                result = {
-                    "channels": {
-                        "official": {"version": "0.1.179", "commit": "a" * 40, "has_update": True},
-                        "overdraft": {
-                            "version": "0.1.179",
-                            "commit": "a" * 40,
-                            "has_update": True,
-                            "patch_available": True,
-                            "patch_sha256": "b" * 64,
-                            "fork_source": {"commit": "c" * 40},
-                        },
-                    }
-                }
-                artifact = Path(temporary) / "prepared" / "sub2api"
-                artifact.parent.mkdir(parents=True)
-                artifact.write_bytes(b"candidate")
-                prepared = {
-                    "status": "ready",
-                    "version": "0.1.179",
-                    "channel": "overdraft",
-                    "source_commit": "a" * 40,
-                    "fork_commit": "c" * 40,
-                    "patch_sha256": "b" * 64,
-                    "artifact": str(artifact),
-                    "binary_sha256": manager.sha256_file(artifact),
-                }
-                with mock.patch.object(manager, "check_update", return_value=result), mock.patch.object(manager, "prepare_candidate", return_value=prepared) as prepare:
+                result = self.release_check(workflow_status="in_progress", workflow_conclusion="")
+                with mock.patch.object(manager, "check_update", return_value=result), \
+                    mock.patch.object(manager, "prepare_release_candidate") as download, \
+                    mock.patch.object(manager, "prepare_candidate") as local_build:
                     output = manager.auto_run()
-                self.assertEqual(output["status"], "ready")
-                prepare.assert_called_once_with(None, None, "overdraft", progress=mock.ANY)
-                self.assertEqual(manager.auto_update_status()["prepared"], prepared)
+                self.assertEqual(output["status"], "building")
+                download.assert_not_called()
+                local_build.assert_not_called()
+
+    def test_auto_update_reports_builder_failure_and_preserves_server(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
+                result = self.release_check(workflow_conclusion="failure")
+                with mock.patch.object(manager, "check_update", return_value=result), \
+                    mock.patch.object(manager, "prepare_release_candidate") as download, \
+                    mock.patch.object(manager, "prepare_candidate") as local_build, \
+                    mock.patch.object(manager, "atomic_replace_binary") as replace:
+                    output = manager.auto_run()
+                self.assertEqual(output["status"], "failed")
+                self.assertEqual(output["last_result"], "build_failed")
+                download.assert_not_called()
+                local_build.assert_not_called()
+                replace.assert_not_called()
+
+    def test_auto_update_downloads_verified_release_without_local_build(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            payload = b"candidate"
+            result = self.release_check(payload=payload)
+
+            def fake_download(_url, destination):
+                destination.write_bytes(payload)
+
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}), \
+                mock.patch.object(manager, "check_update", return_value=result), \
+                mock.patch.object(manager, "download", side_effect=fake_download) as download, \
+                mock.patch.object(manager, "prepare_candidate") as local_build:
+                output = manager.auto_run()
+            self.assertEqual(output["status"], "ready")
+            self.assertEqual(output["prepared"]["source_mode"], "verified-github-release")
+            download.assert_called_once()
+            local_build.assert_not_called()
+
+    def test_prepare_release_candidate_rejects_size_and_checksum_mismatch(self):
+        for mismatch in ("size", "checksum"):
+            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as temporary:
+                result = self.release_check(payload=b"candidate")
+                downloaded = b"short" if mismatch == "size" else b"different"
+
+                def fake_download(_url, destination):
+                    destination.write_bytes(downloaded)
+
+                with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}), \
+                    mock.patch.object(manager, "download", side_effect=fake_download):
+                    with self.assertRaisesRegex(manager.ManagerError, f"{mismatch} mismatch"):
+                        manager.prepare_release_candidate(result)
+
+    def test_check_update_detects_official_release_ahead(self):
+        with mock.patch.object(manager, "current_build", return_value={"version": "0.1.178", "commit": "c" * 40}), \
+            mock.patch.object(manager, "builder_workflow_status", return_value={"status": "completed", "conclusion": "success"}), \
+            mock.patch.object(manager, "latest_verified_release", return_value=self.release_check()["release"]), \
+            mock.patch.object(manager, "official_release_notice", return_value={"version": "0.1.179", "html_url": "https://github.com/Wei-Shaw/sub2api/releases/latest"}):
+            result = manager.check_update()
+        self.assertIs(result["official_ahead"], True)
+
+    def test_check_update_matches_installed_binary_hash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = Path(temporary) / "sub2api"
+            binary.write_bytes(b"candidate")
+            release = self.release_check(payload=b"candidate")["release"]
+            with mock.patch.object(manager, "binary_path", return_value=binary), \
+                mock.patch.object(manager, "current_build", return_value={"version": release["version"], "commit": "c" * 40}), \
+                mock.patch.object(manager, "builder_workflow_status", return_value={"status": "completed", "conclusion": "success"}), \
+                mock.patch.object(manager, "latest_verified_release", return_value=release), \
+                mock.patch.object(manager, "official_release_notice", return_value={"version": "0.1.178", "html_url": "https://github.com/Wei-Shaw/sub2api/releases/latest"}):
+                result = manager.check_update()
+        self.assertIs(result["has_update"], False)
+
+    def test_latest_verified_release_rejects_untrusted_author_metadata_and_checksum(self):
+        tag = "fusion-v0.1.178-overdraft.1-e0c48a19-45e40b4f-u0bbd2518"
+        digest = manager.hashlib.sha256(b"candidate").hexdigest()
+        release = {
+            "tag_name": tag,
+            "author": {"login": "github-actions[bot]"},
+            "assets": [
+                {
+                    "name": "build-metadata.json",
+                    "browser_download_url": "https://github.com/kiasd/repo/releases/download/test/build-metadata.json",
+                    "size": 500,
+                },
+                {
+                    "name": "SHA256SUMS",
+                    "browser_download_url": "https://github.com/kiasd/repo/releases/download/test/SHA256SUMS",
+                    "size": 200,
+                },
+                {
+                    "name": "sub2api",
+                    "browser_download_url": "https://github.com/kiasd/repo/releases/download/test/sub2api",
+                    "size": len(b"candidate"),
+                },
+            ],
+        }
+        metadata = {
+            "status": "verified",
+            "release_tag": tag,
+            "release_version": "0.1.178-overdraft.1",
+            "build": {"tests": "passed", "binary_sha256": digest},
+            "inputs": {
+                "fork": {"commit": "a" * 40},
+                "official": {"version": "0.1.178", "commit": "b" * 40},
+            },
+        }
+        metadata_text = json.dumps(metadata, sort_keys=True)
+
+        untrusted = dict(release)
+        untrusted["author"] = {"login": "someone-else"}
+        with mock.patch.object(manager, "fetch_json", return_value=untrusted):
+            with self.assertRaisesRegex(manager.ManagerError, "GitHub Actions"):
+                manager.latest_verified_release()
+
+        pending_metadata = json.dumps(dict(metadata, status="pending"), sort_keys=True)
+        with mock.patch.object(manager, "fetch_json", return_value=release), \
+            mock.patch.object(manager, "fetch_small_text", return_value=pending_metadata):
+            with self.assertRaisesRegex(manager.ManagerError, "not verified"):
+                manager.latest_verified_release()
+
+        sums = f"{'0' * 64}  build-metadata.json\n{digest}  sub2api\n"
+        with mock.patch.object(manager, "fetch_json", return_value=release), \
+            mock.patch.object(manager, "fetch_small_text", side_effect=[metadata_text, sums]):
+            with self.assertRaisesRegex(manager.ManagerError, "metadata checksum"):
+                manager.latest_verified_release()
 
     def test_apply_prepared_is_the_only_path_that_replaces_binary(self):
         with tempfile.TemporaryDirectory() as temporary:

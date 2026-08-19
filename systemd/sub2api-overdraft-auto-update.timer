@@ -1,5 +1,5 @@
 [Unit]
-Description=Randomized 3-5 hour Sub2API overdraft update check
+Description=Randomized 3-5 hour verified Sub2API Release check
 
 [Timer]
 OnBootSec=3h

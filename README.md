@@ -57,27 +57,27 @@ fusion-v<融合版本>-<官方提交8位>-<透支提交8位>-u<UI清单8位>
 
 ## 与 2222 面板的边界
 
-Actions 只负责检测、融合、测试和发布，不会连接生产服务器。2222 面板应读取 GitHub Releases，在用户点击更新后执行本仓库现有管理器流程：
+Actions 负责跟踪两个上游、融合、测试和发布，不会连接生产服务器。服务器上的 `release_monitor.py` 每 3–5 小时执行一次，只做以下工作：
 
-1. 校验 `SHA256SUMS` 和 `build-metadata.json`。
-2. 全量备份程序、配置和 PostgreSQL。
-3. 对数据库副本运行迁移兼容检查。
-4. 暂存候选二进制并等待人工确认。
-5. 原子切换、重启和健康检查；失败时自动恢复旧二进制与数据库。
+1. 查询官方最新 Release 和本仓库 `auto-build.yml` 状态。
+2. 校验融合 Release 必须由 `github-actions[bot]` 发布。
+3. 校验 Release 标签、`build-metadata.json`、测试状态和 `SHA256SUMS`。
+4. 官方版本领先融合 Release 时显示“等待仓库编译”，不下载旧候选包。
+5. 下载并复核候选二进制的大小与 SHA-256，随后等待人工应用。
 
-这种边界保证“自动编译，人工上线”。构建失败只会生成兼容性 Issue，不会覆盖当前服务。
+2222 面板不拉取两个上游源码，也不运行 Go、Node 或 pnpm。只有用户点击“应用已验证版本”后，服务器才全量备份程序、配置和 PostgreSQL，然后原子切换、重启并执行健康检查；失败时恢复旧程序和数据库。构建失败只在面板显示告警和 Actions 链接，当前服务保持不变。
 
 ## 本地校验
 
 ```bash
-python3 -m compileall -q manager.py auto_update.py scripts tests
+python3 -m compileall -q manager.py auto_update.py release_monitor.py scripts tests
 python3 scripts/validate_repository.py
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 python3 scripts/detect_updates.py --output build/detection.json
 python3 scripts/build_candidate.py --detection build/detection.json --output dist
 ```
 
-完整构建需要 Go 1.26.6、Node.js 24 和 pnpm 9 或 10。数据库备份与原子切换工具的配置样例位于 `config/manager.env.example`。
+完整构建需要 Go 1.26.6、Node.js 24 和 pnpm 9 或 10，这些工具由 GitHub Actions 使用，不要求安装在生产服务器。数据库备份与原子切换工具的配置样例位于 `config/manager.env.example`。
 
 ## 更新策略
 

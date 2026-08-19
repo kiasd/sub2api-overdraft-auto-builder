@@ -28,7 +28,6 @@ WEB_PASSWORD = os.environ["BACKUP_WEB_PASSWORD"]
 WEB_HOST = os.environ.get("BACKUP_WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.environ.get("BACKUP_WEB_PORT", "2222"))
 IP_CHECK_INTERVAL = max(300, int(os.environ.get("IP_CHECK_INTERVAL", "1800")))
-PLUGIN_UPDATE_INTERVAL = max(300, int(os.environ.get("PLUGIN_UPDATE_INTERVAL", "900")))
 IP_INFO_URL = os.environ.get("IP_INFO_URL", "https://ipinfo.io/json")
 STATE_DIR = Path(os.environ.get("BACKUP_WEB_STATE_DIR", "/var/lib/sub2api-backup-web")).resolve()
 EMAIL_CONFIG_PATH = Path(os.environ.get("EMAIL_CONFIG_PATH", str(STATE_DIR / "email-config.json"))).resolve()
@@ -77,8 +76,11 @@ PLUGIN_UPDATE_STATUS = {
     "current_channel": "未知",
     "version": "检测中",
     "has_update": None,
-    "channels": {},
-    "patch_catalog": {},
+    "repository": "kiasd/sub2api-overdraft-auto-builder",
+    "workflow": {},
+    "release": {},
+    "official": {},
+    "official_ahead": None,
     "checked_at": "",
     "error": "",
 }
@@ -376,16 +378,60 @@ def set_plugin_action_status(kind, message):
 
 def save_plugin_update_result(result):
     global PLUGIN_UPDATE_STATUS
+    summary = result.get("check", {}) if isinstance(result, dict) else {}
+    if not isinstance(summary, dict):
+        summary = {}
+    release = result.get("release", {}) if isinstance(result, dict) else {}
+    if not isinstance(release, dict):
+        release = {}
+    workflow = result.get("workflow", {}) if isinstance(result, dict) else {}
+    if not isinstance(workflow, dict):
+        workflow = {}
+    official = result.get("official", {}) if isinstance(result, dict) else {}
+    if not isinstance(official, dict):
+        official = {}
+    if not release and summary:
+        release = {
+            "version": summary.get("release_version", "未知"),
+            "tag": summary.get("release_tag", ""),
+            "binary_sha256": summary.get("release_sha256", ""),
+            "html_url": summary.get("release_url", ""),
+            "official_version": summary.get("release_official_version", "未知"),
+        }
+    if not workflow and summary:
+        workflow = {
+            "status": summary.get("workflow_status", "unknown"),
+            "conclusion": summary.get("workflow_conclusion", ""),
+            "html_url": summary.get("workflow_url", ""),
+            "failed": summary.get("workflow_status") == "completed"
+            and summary.get("workflow_conclusion") not in {"success", "skipped"},
+        }
+    if not official and summary:
+        official = {
+            "version": summary.get("official_version", "未知"),
+            "html_url": summary.get("official_url", ""),
+        }
     status = {
-        "current_version": str(result.get("current_version", "未知")),
-        "current_channel": str(result.get("current_channel", result.get("selected_channel", "未知"))),
+        "current_version": str(result.get("current_version", summary.get("current_version", "未知"))),
+        "current_channel": str(result.get("current_channel", summary.get("current_channel", "未知"))),
         "current_commit": str(result.get("current_commit", "unknown")),
-        "version": str(result.get("version", "未知")),
-        "commit": str(result.get("commit", "unknown")),
-        "has_update": result.get("has_update") if isinstance(result.get("has_update"), bool) else None,
-        "channels": result.get("channels", {}) if isinstance(result.get("channels", {}), dict) else {},
-        "patch_catalog": result.get("patch_catalog", {}) if isinstance(result.get("patch_catalog", {}), dict) else {},
-        "html_url": str(result.get("html_url", "")),
+        "version": str(result.get("version", release.get("version", "未知"))),
+        "commit": str(result.get("commit", release.get("source_commit", "unknown"))),
+        "has_update": result.get("has_update")
+        if isinstance(result.get("has_update"), bool)
+        else summary.get("has_update")
+        if isinstance(summary.get("has_update"), bool)
+        else None,
+        "repository": str(result.get("repository", release.get("repository", "kiasd/sub2api-overdraft-auto-builder"))),
+        "workflow": workflow,
+        "release": release,
+        "official": official,
+        "official_ahead": result.get("official_ahead")
+        if isinstance(result.get("official_ahead"), bool)
+        else summary.get("official_ahead")
+        if isinstance(summary.get("official_ahead"), bool)
+        else None,
+        "html_url": str(result.get("html_url", release.get("html_url", ""))),
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "error": "" if result.get("ok") else str(result.get("error", "更新检测失败"))[:500],
     }
@@ -405,6 +451,9 @@ def save_plugin_auto_status(result):
         value = {}
     with PLUGIN_UPDATE_STATUS_LOCK:
         PLUGIN_AUTO_STATUS = dict(PLUGIN_AUTO_STATUS) | value
+    last_check = value.get("last_check", {})
+    if isinstance(last_check, dict) and last_check:
+        save_plugin_update_result({"ok": True, "check": last_check})
 
 
 def plugin_auto_status():
@@ -419,17 +468,6 @@ def refresh_plugin_auto_status():
         finally:
             PLUGIN_LOCK.release()
     return plugin_auto_status()
-
-
-def plugin_update_loop():
-    while True:
-        if PLUGIN_LOCK.acquire(blocking=False):
-            try:
-                save_plugin_update_result(plugin_control("check-update", timeout=60))
-                save_plugin_auto_status(plugin_control("auto-status", timeout=20))
-            finally:
-                PLUGIN_LOCK.release()
-        time.sleep(PLUGIN_UPDATE_INTERVAL)
 
 
 def collect_server_status():
@@ -791,11 +829,9 @@ class BackupHandler(BaseHTTPRequestHandler):
         action = form.get("action", [""])[0]
         value = form.get("value", [""])[0]
         timeouts = {
-            "check-update": 60,
+            "check-update": 900,
             "set-auto-update": 30,
             "apply-prepared": 7200,
-            "upgrade": 7200,
-            "switch": 7200,
             "rollback": 1800,
             "enable-overdraft": 300,
         }
@@ -808,19 +844,21 @@ class BackupHandler(BaseHTTPRequestHandler):
         if action == "set-auto-update" and value not in {"on", "off"}:
             self.send_error(400)
             return
-        if action in {"upgrade", "switch"} and value not in {"official", "overdraft"}:
-            self.send_error(400)
-            return
         if not PLUGIN_LOCK.acquire(blocking=False):
-            self.respond_operation_result(409, "已有插件操作正在执行。", "插件操作结果")
+            self.respond_operation_result(409, "已有 Release 监控或更新操作正在执行。", "版本操作结果")
             return
         try:
-            result = plugin_control(action, value if action in {"enable-overdraft", "set-auto-update", "upgrade", "switch"} else None, timeouts[action])
+            control_action = "auto-run" if action == "check-update" else action
+            result = plugin_control(
+                control_action,
+                value if action in {"enable-overdraft", "set-auto-update"} else None,
+                timeouts[action],
+            )
         finally:
             PLUGIN_LOCK.release()
         if action == "check-update":
             save_plugin_update_result(result)
-            save_plugin_auto_status(plugin_control("auto-status", timeout=20))
+            save_plugin_auto_status(result)
         if action == "set-auto-update":
             save_plugin_auto_status(plugin_control("auto-status", timeout=20))
         if not result.get("ok"):
@@ -829,24 +867,29 @@ class BackupHandler(BaseHTTPRequestHandler):
             self.respond_operation_result(500, message, "插件操作结果")
             return
         labels = {
-            "check-update": "更新检查已完成。",
-            "set-auto-update": "自动编译更新设置已更新。",
+            "check-update": "构建仓库监控已完成。",
+            "set-auto-update": "Release 监控设置已更新。",
             "apply-prepared": "准备好的版本已应用并完成健康检查。",
-            "upgrade": "升级、重启和健康检查已完成。",
-            "switch": "通道切换、重启和健康检查已完成。",
             "rollback": "回退、重启和健康检查已完成。",
             "enable-overdraft": "透支设置已更新并完成重启。",
         }
         detail = labels[action]
-        if action in {"upgrade", "switch", "apply-prepared"}:
+        if action == "apply-prepared":
             refreshed = plugin_control("check-update", timeout=60)
             save_plugin_update_result(refreshed)
             save_plugin_auto_status(plugin_control("auto-status", timeout=20))
         if action == "check-update":
-            latest = result.get("version", "未知")
-            current = result.get("current_version", "未知")
-            selected = result.get("selected_channel", result.get("current_channel", "未知"))
-            detail = f"更新检查已完成：{selected} 通道当前 {current}，最新 {latest}。"
+            monitor_status = str(result.get("status", "unknown"))
+            if monitor_status == "ready":
+                detail = "已验证 Release 已下载，等待你点击应用。"
+            elif monitor_status == "waiting_builder":
+                detail = "官方已发布新版本，正在等待 GitHub 融合仓库完成编译。"
+            elif monitor_status == "building":
+                detail = "GitHub 正在融合编译，服务器不会本地编译。"
+            elif monitor_status == "failed":
+                detail = "GitHub 构建或仓库监控失败，服务器继续运行旧版。"
+            else:
+                detail = "构建仓库检查完成，当前没有需要应用的新 Release。"
         set_plugin_action_status("success", detail)
         self.respond_operation_result(200, detail, "插件操作结果")
 
@@ -991,14 +1034,13 @@ class BackupHandler(BaseHTTPRequestHandler):
         auto_status = plugin_auto_status()
         if isinstance(current_plugin_status.get("auto_update"), dict):
             auto_status.update(current_plugin_status["auto_update"])
-        channel_value = "overdraft"
-        channel_label = "官方" if channel_value == "official" else "透支"
-        channel_updates = update_status.get("channels", {}) if isinstance(update_status.get("channels", {}), dict) else {}
-        official_update = channel_updates.get("official", {}) if isinstance(channel_updates.get("official", {}), dict) else {}
-        overdraft_update = channel_updates.get("overdraft", {}) if isinstance(channel_updates.get("overdraft", {}), dict) else {}
-        latest_plugin_version = html.escape(str(update_status.get("version", "检测中")))
-        has_plugin_update = update_status.get("has_update")
-        plugin_update_label = "可更新" if has_plugin_update is True else "已是最新" if has_plugin_update is False else "检测中"
+        current_state_value = current_plugin_status.get("current_state", {})
+        stored_channel = current_state_value.get("channel", "未知") if isinstance(current_state_value, dict) else "未知"
+        current_channel_value = str(update_status.get("current_channel") or stored_channel)
+        channel_label = "自用融合版" if current_channel_value == "overdraft" else "官方版" if current_channel_value == "official" else "未知"
+        official_update = update_status.get("official", {}) if isinstance(update_status.get("official", {}), dict) else {}
+        release_update = update_status.get("release", {}) if isinstance(update_status.get("release", {}), dict) else {}
+        workflow_update = update_status.get("workflow", {}) if isinstance(update_status.get("workflow", {}), dict) else {}
         plugin_update_checked = html.escape(str(update_status.get("checked_at", "尚未检测")))
         auto_enabled = auto_status.get("enabled") is True
         auto_enabled_label = "已启用" if auto_enabled else "已停用"
@@ -1008,9 +1050,13 @@ class BackupHandler(BaseHTTPRequestHandler):
         auto_status_labels = {
             "no_update": "无更新",
             "updated": "已完成更新",
-            "upgrade_staged": "已编译，正在切换",
-            "blocked_patch": "等待补丁适配",
-            "failed": "编译失败，保留旧版",
+            "restart_pending": "等待健康检查",
+            "waiting_builder": "官方已更新，等待仓库编译",
+            "building": "GitHub 正在编译",
+            "build_failed": "GitHub 编译失败，保留旧版",
+            "downloading": "正在下载已验证版本",
+            "ready": "已下载，等待应用",
+            "failed": "仓库监控失败，保留旧版",
             "disabled": "已停用",
         }
         auto_run_label = html.escape(auto_status_labels.get(auto_run_status, auto_run_status))
@@ -1020,29 +1066,50 @@ class BackupHandler(BaseHTTPRequestHandler):
         auto_stage = html.escape(str(auto_status.get("stage") or "尚未开始"))
         prepared = auto_status.get("prepared", {}) if isinstance(auto_status.get("prepared", {}), dict) else {}
         auto_ready = auto_status.get("status") == "ready" and prepared.get("status") == "ready"
-        auto_apply_action = "apply-prepared" if auto_ready else "upgrade"
-        auto_apply_label = "应用准备好的更新" if auto_ready else "手动编译并更新"
-        auto_apply_confirm = "确认应用已经编译并通过检查的版本？" if auto_ready else "确认立即手动编译并更新透支版本？"
+        auto_apply_label = "应用已验证版本" if auto_ready else {
+            "waiting_builder": "等待仓库跟进官方版本",
+            "building": "仓库编译中",
+            "failed": "构建失败，保持旧版",
+            "downloading": "正在下载候选包",
+        }.get(str(auto_status.get("status", "")), "暂无可应用版本")
+        auto_apply_disabled = "" if auto_ready else " disabled"
+        auto_apply_confirm = "确认应用已通过仓库测试和校验的版本？系统会先执行完整备份。"
         prepared_info = (
-            f"候选版本 {html.escape(str(prepared.get('version', '未知')))} · "
+            f"已验证候选 {html.escape(str(prepared.get('version', '未知')))} · "
             f"SHA256 {html.escape(str(prepared.get('binary_sha256', ''))[:16])}..."
             if prepared.get("version") and prepared.get("binary_sha256")
-            else "暂无候选编译包"
+            else "暂无已验证候选包"
         )
-        plugin_state_value = current_plugin_status.get("current_state", {})
+        plugin_state_value = current_state_value
         plugin_state = html.escape(str(plugin_state_value.get("status", "未接入")) if isinstance(plugin_state_value, dict) else "未知")
         overdraft_value = current_plugin_status.get("weekly_overdraft_enabled")
         overdraft_label = "已启用" if overdraft_value is True else "已停用" if overdraft_value is False else "未知"
         overdraft_next = "off" if overdraft_value is True else "on"
         overdraft_button = "停用透支" if overdraft_value is True else "启用透支"
         official_latest = html.escape(str(official_update.get("version", "检测中")))
-        overdraft_latest = html.escape(str(overdraft_update.get("version", "检测中")))
-        official_state = "有新 Release" if official_update.get("has_update") is True else "已就绪" if official_update else "未检测"
-        overdraft_state = "有新功能" if overdraft_update.get("has_update") is True else "已就绪" if overdraft_update else "未检测"
-        fork_source = overdraft_update.get("fork_source", {}) if isinstance(overdraft_update.get("fork_source", {}), dict) else {}
-        fork_commit = html.escape(str(fork_source.get("commit", "未同步"))[:12])
-        patch_catalog = update_status.get("patch_catalog", {}) if isinstance(update_status.get("patch_catalog", {}), dict) else {}
-        patch_sync_label = "已同步" if patch_catalog.get("count", 0) else "未同步"
+        official_state = "等待融合仓库跟进" if update_status.get("official_ahead") is True else "融合基线已跟进" if official_update else "未检测"
+        release_version = html.escape(str(release_update.get("version", "检测中")))
+        release_base = html.escape(str(release_update.get("official_version", "检测中")))
+        release_tag = html.escape(str(release_update.get("tag", "尚无已验证 Release")))
+        release_hash = html.escape(str(release_update.get("binary_sha256", ""))[:16])
+        workflow_status = str(workflow_update.get("status", "unknown"))
+        workflow_conclusion = str(workflow_update.get("conclusion", ""))
+        workflow_failed = workflow_update.get("failed") is True or (
+            workflow_status == "completed" and workflow_conclusion not in {"success", "skipped", ""}
+        )
+        if workflow_failed:
+            workflow_state = f"构建失败：{html.escape(workflow_conclusion or 'unknown')}"
+        elif workflow_status != "completed":
+            workflow_state = "正在编译" if workflow_status in {"queued", "in_progress", "pending"} else "等待检测"
+        else:
+            workflow_state = "构建通过" if workflow_conclusion == "success" else html.escape(workflow_conclusion or "已完成")
+        workflow_url = str(workflow_update.get("html_url", ""))
+        workflow_link = (
+            f'<a id="builderWorkflowLink" href="{html.escape(workflow_url, quote=True)}" target="_blank" rel="noopener noreferrer">查看 Actions</a>'
+            if workflow_url.startswith("https://github.com/")
+            else '<a id="builderWorkflowLink" hidden>查看 Actions</a>'
+        )
+        workflow_error_class = " build-failure" if workflow_failed else ""
         recipient_text = ", ".join(email_config["recipients"])
         masked_password = "已保存授权码，留空保持不变" if email_config["smtp_password"] else "填写 QQ 邮箱授权码"
         table_rows = []
@@ -1127,11 +1194,15 @@ class BackupHandler(BaseHTTPRequestHandler):
     .channel-grid {{ display:grid; gap:8px; margin-top:14px; }}
     .channel-row {{ display:grid; grid-template-columns:150px minmax(0,1fr) minmax(80px,auto); gap:12px; align-items:center; padding:10px 12px; border:1px solid #e7ebf0; border-radius:5px; color:var(--muted); font-size:12px; }}
     .channel-row strong, .channel-row b {{ color:var(--ink); }}
+    .channel-row a {{ color:#175cd3; font-weight:700; text-decoration:none; }}
+    .channel-row a:hover {{ text-decoration:underline; }}
+    .build-failure, .build-failure a {{ color:#b42318 !important; }}
     .plugin-actions {{ display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }}
     .plugin-actions form {{ margin:0; }}
     .plugin-button {{ border:1px solid #c7ced8; border-radius:5px; padding:8px 11px; background:#fff; color:#344054; font:inherit; font-weight:600; cursor:pointer; }}
     .plugin-button.primary {{ color:#fff; background:#166534; border-color:#166534; }}
     .plugin-button.danger {{ color:#9a3412; background:#fff7ed; border-color:#fdba74; }}
+    .plugin-button:disabled {{ color:#98a2b3; background:#f2f4f7; border-color:#d0d5dd; cursor:not-allowed; }}
     .plugin-auto-status {{ display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:12px; color:var(--muted); font-size:12px; }}
     .plugin-auto-status b {{ color:var(--ink); }}
     .plugin-auto-status .auto-error {{ color:#991b1b; overflow-wrap:anywhere; }}
@@ -1211,22 +1282,23 @@ class BackupHandler(BaseHTTPRequestHandler):
       <div class="metric"><span>最新备份</span><strong>{html.escape(latest)}</strong></div>
       <div class="metric"><span>下次执行</span><strong>每日 03:00</strong></div>
     </section>
-    <section class="plugin-settings" aria-label="双通道版本管理">
-      <div class="plugin-header"><h2>Sub2API 双通道版本</h2><span id="pluginUpdateChecked">检测时间：{plugin_update_checked}</span></div>
-      <div class="plugin-summary"><span>当前通道<strong id="pluginCurrentChannel">{channel_label}</strong></span><span>当前版本<strong id="pluginCurrentVersion">{plugin_version}</strong></span><span>部署状态<strong>{plugin_state}</strong></span><span>透支功能<strong>{overdraft_label}</strong></span><span>分支提交<strong id="forkFeatureCommit">{fork_commit}</strong></span><span>补丁同步<strong id="patchSyncState">{patch_sync_label}</strong></span><span>自动编译更新<strong id="pluginAutoEnabled">{auto_enabled_label}</strong></span></div>
+    <section class="plugin-settings" aria-label="Sub2API 版本监控">
+      <div class="plugin-header"><h2>Sub2API 版本监控</h2><span id="pluginUpdateChecked">检测时间：{plugin_update_checked}</span></div>
+      <div class="plugin-summary"><span>当前版本类型<strong id="pluginCurrentChannel">{channel_label}</strong></span><span>当前版本<strong id="pluginCurrentVersion">{plugin_version}</strong></span><span>部署状态<strong>{plugin_state}</strong></span><span>透支功能<strong>{overdraft_label}</strong></span><span>Release 监控<strong id="pluginAutoEnabled">{auto_enabled_label}</strong></span></div>
       <div class="channel-grid">
-        <div class="channel-row"><strong>官方基线</strong><span>Release <b id="officialLatestVersion">{official_latest}</b></span><span id="officialUpdateState">{official_state}</span></div>
-        <div class="channel-row"><strong>透支功能来源</strong><span>官方基线 <b id="overdraftLatestVersion">{overdraft_latest}</b></span><span id="overdraftUpdateState">{overdraft_state}</span></div>
+        <div class="channel-row"><strong>官方最新 Release</strong><span>版本 <b id="officialLatestVersion">{official_latest}</b></span><span id="officialUpdateState">{official_state}</span></div>
+        <div class="channel-row{workflow_error_class}"><strong>GitHub 融合构建</strong><span>{workflow_link}</span><span id="builderWorkflowState">{workflow_state}</span></div>
+        <div class="channel-row"><strong>已验证融合 Release</strong><span><b id="verifiedReleaseVersion">{release_version}</b> · 官方基线 <b id="verifiedReleaseBase">{release_base}</b></span><span id="verifiedReleaseState">{release_tag}{f' · {release_hash}...' if release_hash else ''}</span></div>
       </div>
       <div class="plugin-actions">
-        <form method="post" action="/plugin"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="check-update"><button class="plugin-button" type="submit">检查更新</button></form>
-        <form id="pluginApplyForm" method="post" action="/plugin" onsubmit="return confirm('{auto_apply_confirm}')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input id="pluginApplyAction" type="hidden" name="action" value="{auto_apply_action}"><input type="hidden" name="value" value="{html.escape(channel_value)}"><button id="pluginApplyButton" class="plugin-button primary" type="submit">{auto_apply_label}</button></form>
-        <form method="post" action="/plugin" onsubmit="return confirm('确认{auto_toggle_label}？')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="set-auto-update"><input type="hidden" name="value" value="{auto_toggle_value}"><button class="plugin-button" type="submit">{auto_toggle_label}</button></form>
+        <form method="post" action="/plugin"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="check-update"><button class="plugin-button" type="submit">检查仓库</button></form>
+        <form id="pluginApplyForm" method="post" action="/plugin" onsubmit="return confirm('{auto_apply_confirm}')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input id="pluginApplyAction" type="hidden" name="action" value="apply-prepared"><button id="pluginApplyButton" class="plugin-button primary" type="submit"{auto_apply_disabled}>{auto_apply_label}</button></form>
+        <form method="post" action="/plugin" onsubmit="return confirm('确认{auto_toggle_label}？')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="set-auto-update"><input type="hidden" name="value" value="{auto_toggle_value}"><button class="plugin-button" type="submit">{auto_toggle_label.replace('自动更新', 'Release 监控')}</button></form>
         <form method="post" action="/plugin" onsubmit="return confirm('确认回退到最近一份完整配对备份？')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="rollback"><button class="plugin-button danger" type="submit">回退</button></form>
         <form method="post" action="/plugin" onsubmit="return confirm('确认{overdraft_button}并重启 Sub2API？')"><input type="hidden" name="csrf_token" value="{html.escape(CSRF_TOKEN)}"><input type="hidden" name="action" value="enable-overdraft"><input type="hidden" name="value" value="{overdraft_next}"><button class="plugin-button" type="submit">{overdraft_button}</button></form>
       </div>
-      <div class="plugin-auto-status"><span>自动检查间隔：3–5 小时</span><span>上次检查：<b id="pluginAutoChecked">{auto_checked_at}</b></span><span>上次结果：<b id="pluginAutoResult">{auto_run_label}</b></span>{f'<span class="auto-error" id="pluginAutoError">{auto_error}</span>' if auto_error else '<span class="auto-error" id="pluginAutoError"></span>'}</div>
-      <div class="plugin-progress" aria-label="自动编译进度"><div class="plugin-progress-track"><div id="pluginAutoProgressBar" class="plugin-progress-bar" style="width:{auto_progress}%"></div></div><span id="pluginAutoProgressLabel" class="plugin-progress-label">{auto_progress}%</span></div>
+      <div class="plugin-auto-status"><span>自动监控间隔：3–5 小时</span><span>上次检查：<b id="pluginAutoChecked">{auto_checked_at}</b></span><span>上次结果：<b id="pluginAutoResult">{auto_run_label}</b></span>{f'<span class="auto-error" id="pluginAutoError">{auto_error}</span>' if auto_error else '<span class="auto-error" id="pluginAutoError"></span>'}</div>
+      <div class="plugin-progress" aria-label="仓库构建与候选包准备进度"><div class="plugin-progress-track"><div id="pluginAutoProgressBar" class="plugin-progress-bar" style="width:{auto_progress}%"></div></div><span id="pluginAutoProgressLabel" class="plugin-progress-label">{auto_progress}%</span></div>
       <div id="pluginAutoStage" class="plugin-stage">{auto_stage}</div>
       <div id="pluginAutoPrepared" class="plugin-stage">{prepared_info}</div>
     </section>
@@ -1319,33 +1391,40 @@ class BackupHandler(BaseHTTPRequestHandler):
       const pluginUpdate = data.plugin_update || {{}};
       document.getElementById('pluginCurrentVersion').textContent = pluginUpdate.current_version || '未知';
       const currentChannel = pluginUpdate.current_channel || 'official';
-      document.getElementById('pluginCurrentChannel').textContent = currentChannel === 'overdraft' ? '透支' : '官方';
-      const channels = pluginUpdate.channels || {{}};
-      const official = channels.official || {{}};
-      const overdraft = channels.overdraft || {{}};
+      document.getElementById('pluginCurrentChannel').textContent = currentChannel === 'overdraft' ? '自用融合版' : '官方版';
+      const official = pluginUpdate.official || {{}};
+      const release = pluginUpdate.release || {{}};
+      const workflow = pluginUpdate.workflow || {{}};
       document.getElementById('officialLatestVersion').textContent = official.version || '未知';
-      document.getElementById('overdraftLatestVersion').textContent = overdraft.version || '未知';
-      document.getElementById('officialUpdateState').textContent = official.error ? '检测失败' : official.has_update === true ? '有新 Release' : official.has_update === false ? '已就绪' : '检测中';
-      document.getElementById('overdraftUpdateState').textContent = overdraft.error ? '检测失败' : overdraft.patch_error ? '等待补丁' : overdraft.has_update === true ? '有新功能' : overdraft.has_update === false ? '已就绪' : '检测中';
-      const forkSource = overdraft.fork_source || {{}};
-      document.getElementById('forkFeatureCommit').textContent = (forkSource.commit || '未同步').slice(0, 12);
-      document.getElementById('patchSyncState').textContent = pluginUpdate.patch_catalog && pluginUpdate.patch_catalog.count ? '已同步' : pluginUpdate.patch_catalog && pluginUpdate.patch_catalog.error ? '同步失败' : '未同步';
+      document.getElementById('officialUpdateState').textContent = pluginUpdate.official_ahead === true ? '等待融合仓库跟进' : official.version ? '融合基线已跟进' : '未检测';
+      document.getElementById('verifiedReleaseVersion').textContent = release.version || '未知';
+      document.getElementById('verifiedReleaseBase').textContent = release.official_version || '未知';
+      document.getElementById('verifiedReleaseState').textContent = release.tag ? release.tag + (release.binary_sha256 ? ' · ' + release.binary_sha256.slice(0, 16) + '...' : '') : '尚无已验证 Release';
+      const workflowFailed = workflow.failed === true || (workflow.status === 'completed' && !['success', 'skipped', ''].includes(workflow.conclusion || ''));
+      document.getElementById('builderWorkflowState').textContent = workflowFailed ? '构建失败：' + (workflow.conclusion || 'unknown') : workflow.status !== 'completed' ? (['queued', 'in_progress', 'pending'].includes(workflow.status) ? '正在编译' : '等待检测') : workflow.conclusion === 'success' ? '构建通过' : workflow.conclusion || '已完成';
+      document.getElementById('builderWorkflowState').closest('.channel-row').classList.toggle('build-failure', workflowFailed);
+      const workflowLink = document.getElementById('builderWorkflowLink');
+      const workflowUrl = typeof workflow.html_url === 'string' && workflow.html_url.startsWith('https://github.com/') ? workflow.html_url : '';
+      workflowLink.hidden = !workflowUrl;
+      if (workflowUrl) workflowLink.href = workflowUrl;
       document.getElementById('pluginUpdateChecked').textContent = '检测时间：' + (pluginUpdate.checked_at || '尚未检测');
       const pluginAuto = data.plugin_auto_update || {{}};
       document.getElementById('pluginAutoEnabled').textContent = pluginAuto.enabled === true ? '已启用' : '已停用';
       document.getElementById('pluginAutoChecked').textContent = pluginAuto.last_checked_at || '尚未运行';
-      const autoLabels = {{ no_update:'无更新', ready:'编译完成，等待应用', updated:'已完成更新', upgrade_staged:'已编译，正在切换', blocked_patch:'等待补丁适配', failed:'编译失败，保留旧版', disabled:'已停用', building:'正在编译' }};
+      const autoLabels = {{ no_update:'无更新', ready:'已下载，等待应用', updated:'已完成更新', restart_pending:'等待健康检查', waiting_builder:'官方已更新，等待仓库编译', build_failed:'GitHub 编译失败，保留旧版', failed:'仓库监控失败，保留旧版', disabled:'已停用', building:'GitHub 正在编译', downloading:'正在下载已验证版本' }};
       document.getElementById('pluginAutoResult').textContent = autoLabels[pluginAuto.last_result] || pluginAuto.last_result || pluginAuto.status || '尚未运行';
       document.getElementById('pluginAutoError').textContent = pluginAuto.last_error || '';
       const progress = Math.max(0, Math.min(100, Number(pluginAuto.progress || 0)));
       document.getElementById('pluginAutoProgressBar').style.width = progress + '%';
       document.getElementById('pluginAutoProgressLabel').textContent = Math.round(progress) + '%';
       document.getElementById('pluginAutoStage').textContent = pluginAuto.stage || '尚未开始';
-      const preparedReady = pluginAuto.status === 'ready' && pluginAuto.prepared && pluginAuto.prepared.status === 'ready';
+      const preparedReady = pluginAuto.status === 'ready' && pluginUpdate.official_ahead !== true && pluginAuto.prepared && pluginAuto.prepared.status === 'ready';
       const prepared = pluginAuto.prepared || {{}};
-      document.getElementById('pluginAutoPrepared').textContent = prepared.version && prepared.binary_sha256 ? '候选版本 ' + prepared.version + ' · SHA256 ' + prepared.binary_sha256.slice(0, 16) + '...' : '暂无候选编译包';
-      document.getElementById('pluginApplyAction').value = preparedReady ? 'apply-prepared' : 'upgrade';
-      document.getElementById('pluginApplyButton').textContent = preparedReady ? '应用准备好的更新' : pluginAuto.status === 'building' ? '编译中，仍可手动更新' : '手动编译并更新';
+      document.getElementById('pluginAutoPrepared').textContent = prepared.version && prepared.binary_sha256 ? '已验证候选 ' + prepared.version + ' · SHA256 ' + prepared.binary_sha256.slice(0, 16) + '...' : '暂无已验证候选包';
+      const applyButton = document.getElementById('pluginApplyButton');
+      const unavailableLabels = {{ waiting_builder:'等待仓库跟进官方版本', building:'仓库编译中', failed:'构建失败，保持旧版', downloading:'正在下载候选包' }};
+      applyButton.disabled = !preparedReady;
+      applyButton.textContent = preparedReady ? '应用已验证版本' : unavailableLabels[pluginAuto.status] || '暂无可应用版本';
     }}
     async function refreshServerStatus() {{
       try {{
@@ -1389,5 +1468,4 @@ class BackupHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=public_ip_loop, name="public-ip-monitor", daemon=True).start()
     threading.Thread(target=email_loop, name="email-monitor", daemon=True).start()
-    threading.Thread(target=plugin_update_loop, name="plugin-update-monitor", daemon=True).start()
     ThreadingHTTPServer((WEB_HOST, WEB_PORT), BackupHandler).serve_forever()

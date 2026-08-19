@@ -43,6 +43,10 @@ OFFICIAL_REPO = os.environ.get("SUB2API_OFFICIAL_REPOSITORY", "Wei-Shaw/sub2api"
 OFFICIAL_RELEASES_URL = f"https://api.github.com/repos/{OFFICIAL_REPO}/releases/latest"
 GITHUB_REPO = os.environ.get("SUB2API_FORK_REPOSITORY", "DeanZFC/sub2api-overdraft")
 GITHUB_BRANCH = os.environ.get("SUB2API_FORK_BRANCH", "codex-overdraft")
+BUILDER_REPO = os.environ.get(
+    "SUB2API_BUILDER_REPOSITORY", "kiasd/sub2api-overdraft-auto-builder"
+)
+BUILDER_API_ROOT = f"https://api.github.com/repos/{BUILDER_REPO}"
 VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+(?:-overdraft\.\d+)?)$")
 FORK_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+-overdraft\.\d+$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -53,6 +57,10 @@ UI_OVERLAY_DIR = Path(
     os.environ.get("SUB2API_UI_OVERLAY_DIR", str(PLUGIN_DIR / "payload" / "ui"))
 ).resolve()
 PATCH_FILE_RE = re.compile(r"^sub2api-overdraft-v(\d+\.\d+\.\d+)-[0-9a-f]+\.patch$")
+FUSION_RELEASE_TAG_RE = re.compile(
+    r"^fusion-v(\d+\.\d+\.\d+-overdraft\.\d+)-[0-9a-f]{8}-[0-9a-f]{8}-u[0-9a-f]{8}$"
+)
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 AUTO_UPDATE_DEFAULT_MIN_HOURS = 3
 AUTO_UPDATE_DEFAULT_MAX_HOURS = 5
 PATCH_BASE_COMMITS = {
@@ -104,7 +112,7 @@ def auto_update_status() -> dict[str, Any]:
     value.setdefault("enabled", True)
     value.setdefault("status", "never_run")
     value.setdefault("progress", 0)
-    value.setdefault("stage", "尚未开始")
+    value.setdefault("stage", "仓库监控尚未开始")
     value.setdefault("last_started_at", "")
     value.setdefault("last_checked_at", "")
     value.setdefault("last_result", "")
@@ -128,7 +136,7 @@ def set_auto_update(enabled: bool) -> dict[str, Any]:
     value = write_auto_update_status(
         enabled=bool(enabled),
         status="enabled" if enabled else "disabled",
-        stage="自动更新已启用" if enabled else "自动更新已停用",
+        stage="Release 监控已启用" if enabled else "Release 监控已停用",
         changed_at=now_utc(),
         last_error="" if enabled else auto_update_status().get("last_error", ""),
     )
@@ -307,6 +315,169 @@ def fetch_json(url: str) -> dict[str, Any]:
         request.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.load(response)
+
+
+def fetch_small_text(url: str, max_bytes: int = 2 * 1024 * 1024) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        raise ManagerError(f"refusing untrusted Release metadata URL: {url}")
+    request = urllib.request.Request(url, headers={"User-Agent": f"{PLUGIN_ID}/1.0"})
+    token = os.environ.get("UPDATE_GITHUB_TOKEN", "").strip()
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        payload = response.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise ManagerError("Release metadata exceeds the allowed size")
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ManagerError("Release metadata is not valid UTF-8") from exc
+
+
+def builder_workflow_status() -> dict[str, Any]:
+    data = fetch_json(
+        f"{BUILDER_API_ROOT}/actions/workflows/auto-build.yml/runs?branch=main&per_page=1"
+    )
+    runs = data.get("workflow_runs", []) if isinstance(data, dict) else []
+    if not isinstance(runs, list) or not runs or not isinstance(runs[0], dict):
+        raise ManagerError("builder repository returned no workflow runs")
+    run = runs[0]
+    status = str(run.get("status", "unknown"))
+    conclusion = str(run.get("conclusion") or "")
+    return {
+        "id": int(run.get("id", 0) or 0),
+        "status": status,
+        "conclusion": conclusion,
+        "event": str(run.get("event", "")),
+        "head_sha": str(run.get("head_sha", "")),
+        "created_at": str(run.get("created_at", "")),
+        "updated_at": str(run.get("updated_at", "")),
+        "html_url": str(run.get("html_url", "")),
+        "failed": status == "completed" and conclusion not in {"success", "skipped"},
+    }
+
+
+def official_release_notice() -> dict[str, Any]:
+    release = fetch_json(OFFICIAL_RELEASES_URL)
+    if not isinstance(release, dict):
+        raise ManagerError("official latest Release payload is invalid")
+    tag = str(release.get("tag_name", ""))
+    version = normalize_version(tag)
+    if channel_for_version(version) != "official":
+        raise ManagerError("official latest Release returned a non-official version")
+    return {
+        "version": version,
+        "tag": tag,
+        "published_at": str(release.get("published_at", "")),
+        "html_url": str(release.get("html_url", "")),
+    }
+
+
+def release_asset(release: dict[str, Any], name: str) -> dict[str, Any]:
+    assets = release.get("assets", [])
+    if not isinstance(assets, list):
+        raise ManagerError("builder Release assets payload is invalid")
+    matches = [
+        asset
+        for asset in assets
+        if isinstance(asset, dict) and str(asset.get("name", "")) == name
+    ]
+    if len(matches) != 1:
+        raise ManagerError(f"builder Release must contain exactly one {name} asset")
+    asset = matches[0]
+    url = str(asset.get("browser_download_url", ""))
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        raise ManagerError(f"builder Release returned an untrusted {name} URL")
+    return asset
+
+
+def parse_sha256sums(text: str) -> dict[str, str]:
+    checksums: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9._-]+)", line)
+        if not match:
+            raise ManagerError("builder SHA256SUMS contains an invalid line")
+        digest, name = match.groups()
+        if name in checksums:
+            raise ManagerError(f"builder SHA256SUMS contains duplicate entry: {name}")
+        checksums[name] = digest
+    return checksums
+
+
+def latest_verified_release() -> dict[str, Any]:
+    release = fetch_json(f"{BUILDER_API_ROOT}/releases/latest")
+    if not isinstance(release, dict):
+        raise ManagerError("builder latest Release payload is invalid")
+    tag = str(release.get("tag_name", ""))
+    tag_match = FUSION_RELEASE_TAG_RE.fullmatch(tag)
+    if not tag_match:
+        raise ManagerError(f"builder latest Release tag is not a fusion tag: {tag!r}")
+    author = release.get("author", {})
+    if not isinstance(author, dict) or str(author.get("login", "")) != "github-actions[bot]":
+        raise ManagerError("builder latest Release was not published by GitHub Actions")
+
+    metadata_asset = release_asset(release, "build-metadata.json")
+    sums_asset = release_asset(release, "SHA256SUMS")
+    binary_asset = release_asset(release, "sub2api")
+    metadata_text = fetch_small_text(str(metadata_asset["browser_download_url"]))
+    try:
+        metadata = json.loads(metadata_text)
+    except json.JSONDecodeError as exc:
+        raise ManagerError("builder build-metadata.json is invalid") from exc
+    if not isinstance(metadata, dict) or metadata.get("status") != "verified":
+        raise ManagerError("builder Release metadata is not verified")
+    if str(metadata.get("release_tag", "")) != tag:
+        raise ManagerError("builder Release tag does not match its metadata")
+    version = normalize_version(str(metadata.get("release_version", "")))
+    if version != tag_match.group(1):
+        raise ManagerError("builder Release version does not match its tag")
+
+    build = metadata.get("build", {})
+    inputs = metadata.get("inputs", {})
+    fork = inputs.get("fork", {}) if isinstance(inputs, dict) else {}
+    official = inputs.get("official", {}) if isinstance(inputs, dict) else {}
+    if not isinstance(build, dict) or build.get("tests") != "passed":
+        raise ManagerError("builder Release did not record passed tests")
+    if not isinstance(fork, dict) or not isinstance(official, dict):
+        raise ManagerError("builder Release upstream provenance is missing")
+    binary_sha256 = str(build.get("binary_sha256", "")).lower()
+    source_commit = str(fork.get("commit", "")).lower()
+    official_version = normalize_version(str(official.get("version", "")))
+    if not SHA256_RE.fullmatch(binary_sha256) or not COMMIT_RE.fullmatch(source_commit):
+        raise ManagerError("builder Release contains invalid binary or source provenance")
+
+    checksums = parse_sha256sums(fetch_small_text(str(sums_asset["browser_download_url"])))
+    if checksums.get("build-metadata.json") != hashlib.sha256(metadata_text.encode("utf-8")).hexdigest():
+        raise ManagerError("builder Release metadata checksum does not match SHA256SUMS")
+    if checksums.get("sub2api") != binary_sha256:
+        raise ManagerError("builder Release checksum does not match build metadata")
+    binary_size = int(binary_asset.get("size", 0) or 0)
+    if binary_size <= 0 or binary_size > MAX_DOWNLOAD_BYTES:
+        raise ManagerError("builder Release binary has an invalid size")
+    return {
+        "repository": BUILDER_REPO,
+        "tag": tag,
+        "version": version,
+        "source_commit": source_commit,
+        "official_version": official_version,
+        "official_commit": str(official.get("commit", "")),
+        "binary_sha256": binary_sha256,
+        "binary_size": binary_size,
+        "binary_url": str(binary_asset["browser_download_url"]),
+        "metadata_sha256": checksums.get("build-metadata.json", ""),
+        "archive_sha256": next(
+            (digest for name, digest in checksums.items() if name.endswith("-linux-amd64.tar.gz")),
+            "",
+        ),
+        "html_url": str(release.get("html_url", "")),
+        "published_at": str(release.get("published_at", "")),
+        "metadata": metadata,
+    }
 
 
 def latest_fork() -> dict[str, Any]:
@@ -1461,6 +1632,8 @@ def overdraft_setting() -> bool | None:
 
 
 def check_update(channel: str | None = None) -> dict[str, Any]:
+    if channel is not None and validate_channel(channel) != "overdraft":
+        raise ManagerError("the server monitor only consumes verified fusion Releases")
     try:
         installed_build = current_build()
     except ManagerError:
@@ -1468,81 +1641,59 @@ def check_update(channel: str | None = None) -> dict[str, Any]:
     installed = installed_build["version"]
     installed_commit = installed_build.get("commit", "unknown")
     current_state = read_json(state_root() / "current.json", {})
-    current_channel = str(current_state.get("channel", channel_for_version(installed))) if isinstance(current_state, dict) else channel_for_version(installed)
-    selected = validate_channel(channel or current_channel)
-    patch_catalog: dict[str, Any] = {}
-    official_info = latest_official()
-    fork_info: dict[str, Any] | None = None
-    with contextlib.suppress(Exception):
-        fork_info = latest_fork()
-    if os.environ.get("SUB2API_SYNC_FORK_PATCHES", "1") == "1":
-        try:
-            patch_catalog = sync_patch_catalog(fork_info)
-        except Exception as exc:
-            patch_catalog = {"error": str(exc)[:500]}
-    channels: dict[str, Any] = {}
-    for candidate_channel in CHANNELS:
-        latest = latest_for_channel(candidate_channel, official_info, fork_info)
-        same_commit = installed_commit == latest["commit"] or (
-            isinstance(installed_commit, str)
-            and re.fullmatch(r"[0-9a-f]{7,40}", installed_commit) is not None
-            and latest["commit"].startswith(installed_commit)
-        )
-        state = read_json(patch_state_path(latest["version"], candidate_channel), {})
-        installed_state = read_json(patch_state_path(installed, current_channel), {})
-        installed_catalog = installed_state.get("patch_catalog", {}) if isinstance(installed_state, dict) else {}
-        installed_fork = installed_catalog.get("source_commit", "") if isinstance(installed_catalog, dict) else ""
-        latest_fork = latest.get("fork_source", {}) if isinstance(latest.get("fork_source", {}), dict) else {}
-        fork_changed = (
-            candidate_channel == "overdraft"
-            and bool(latest_fork.get("commit"))
-            and str(latest_fork.get("commit")) != str(installed_fork)
-        )
-        patch_changed = (
-            candidate_channel == "overdraft"
-            and bool(latest.get("patch_sha256"))
-            and str(latest.get("patch_sha256")) != str(installed_state.get("patch_sha256", ""))
-        )
-        channels[candidate_channel] = latest | {
-            "current_version": installed,
-            "current_commit": installed_commit,
-            "current_channel": current_channel,
-            "has_update": (
-                current_channel != candidate_channel
-                or installed != latest["version"]
-                or not same_commit
-                or fork_changed
-                or patch_changed
-            ),
-            "fork_changed": fork_changed,
-            "patch_changed": patch_changed,
-            "patch_state": state,
-        }
-    return channels[selected] | {
-        "selected_channel": selected,
-        "channels": channels,
-        "patch_catalog": patch_catalog,
+    default_channel = channel_for_version(installed) if installed != "unknown" else "unknown"
+    current_channel = (
+        str(current_state.get("channel", default_channel))
+        if isinstance(current_state, dict)
+        else default_channel
+    )
+    workflow = builder_workflow_status()
+    release = latest_verified_release()
+    official = official_release_notice()
+    installed_binary_sha256 = ""
+    with contextlib.suppress(OSError):
+        if binary_path().is_file():
+            installed_binary_sha256 = sha256_file(binary_path())
+    has_update = installed_binary_sha256 != release["binary_sha256"]
+    official_ahead = version_key(official["version"]) > version_key(release["official_version"])
+    return {
+        "selected_channel": "overdraft",
+        "current_channel": current_channel,
+        "current_version": installed,
+        "current_commit": installed_commit,
+        "current_binary_sha256": installed_binary_sha256,
+        "version": release["version"],
+        "commit": release["source_commit"],
+        "has_update": has_update,
+        "html_url": release["html_url"],
+        "repository": BUILDER_REPO,
+        "workflow": workflow,
+        "release": release,
+        "official": official,
+        "official_ahead": official_ahead,
+        "checked_at": now_utc(),
     }
 
 
 def auto_check_summary(result: dict[str, Any]) -> dict[str, Any]:
-    channels = result.get("channels", {}) if isinstance(result.get("channels", {}), dict) else {}
-    official = channels.get("official", {}) if isinstance(channels.get("official", {}), dict) else {}
-    overdraft = channels.get("overdraft", {}) if isinstance(channels.get("overdraft", {}), dict) else {}
-    fork_source = overdraft.get("fork_source", {}) if isinstance(overdraft.get("fork_source", {}), dict) else {}
+    workflow = result.get("workflow", {}) if isinstance(result.get("workflow", {}), dict) else {}
+    release = result.get("release", {}) if isinstance(result.get("release", {}), dict) else {}
+    official = result.get("official", {}) if isinstance(result.get("official", {}), dict) else {}
     return {
         "current_version": result.get("current_version", "unknown"),
         "current_channel": result.get("current_channel", "unknown"),
+        "release_version": release.get("version", "unknown"),
+        "release_tag": release.get("tag", ""),
+        "release_sha256": release.get("binary_sha256", ""),
+        "release_url": release.get("html_url", ""),
+        "release_official_version": release.get("official_version", "unknown"),
         "official_version": official.get("version", "unknown"),
-        "official_commit": official.get("commit", "unknown"),
-        "overdraft_version": overdraft.get("version", "unknown"),
-        "overdraft_commit": overdraft.get("commit", "unknown"),
-        "fork_commit": fork_source.get("commit", "unknown"),
-        "patch_sha256": overdraft.get("patch_sha256", ""),
-        "official_has_update": official.get("has_update"),
-        "overdraft_has_update": overdraft.get("has_update"),
-        "patch_available": overdraft.get("patch_available"),
-        "patch_error": overdraft.get("patch_error", ""),
+        "official_url": official.get("html_url", ""),
+        "official_ahead": result.get("official_ahead"),
+        "has_update": result.get("has_update"),
+        "workflow_status": workflow.get("status", "unknown"),
+        "workflow_conclusion": workflow.get("conclusion", ""),
+        "workflow_url": workflow.get("html_url", ""),
     }
 
 
@@ -1552,21 +1703,78 @@ def prepared_update() -> dict[str, Any]:
 
 
 def prepared_matches(prepared: dict[str, Any], check: dict[str, Any]) -> bool:
-    overdraft = check.get("channels", {}).get("overdraft", {}) if isinstance(check.get("channels", {}), dict) else {}
-    if not isinstance(overdraft, dict) or prepared.get("status") != "ready":
+    release = check.get("release", {})
+    if not isinstance(release, dict) or prepared.get("status") != "ready":
         return False
     artifact = Path(str(prepared.get("artifact", "")))
     if not artifact.is_file():
         return False
     return (
-        str(prepared.get("version", "")) == str(overdraft.get("version", ""))
-        and str(prepared.get("source_commit", "")) == str(overdraft.get("commit", ""))
-        and str(prepared.get("patch_sha256", "")) == str(overdraft.get("patch_sha256", ""))
-        and str(prepared.get("fork_commit", "")) == str(
-            (overdraft.get("fork_source", {}) if isinstance(overdraft.get("fork_source", {}), dict) else {}).get("commit", "")
-        )
+        str(prepared.get("version", "")) == str(release.get("version", ""))
+        and str(prepared.get("release_tag", "")) == str(release.get("tag", ""))
+        and str(prepared.get("source_commit", "")) == str(release.get("source_commit", ""))
+        and str(prepared.get("binary_sha256", "")) == str(release.get("binary_sha256", ""))
         and sha256_file(artifact) == str(prepared.get("binary_sha256", ""))
     )
+
+
+def prepare_release_candidate(check: dict[str, Any]) -> dict[str, Any]:
+    release = check.get("release", {})
+    workflow = check.get("workflow", {})
+    if not isinstance(release, dict) or not isinstance(workflow, dict):
+        raise ManagerError("verified Release information is missing")
+    if check.get("official_ahead") is True:
+        raise ManagerError("official Release is newer than the verified fusion Release")
+    if workflow.get("status") != "completed" or workflow.get("conclusion") != "success":
+        raise ManagerError("latest builder workflow has not completed successfully")
+    tag = str(release.get("tag", ""))
+    if not FUSION_RELEASE_TAG_RE.fullmatch(tag):
+        raise ManagerError("refusing an invalid fusion Release tag")
+    version = normalize_version(str(release.get("version", "")))
+    expected_hash = str(release.get("binary_sha256", "")).lower()
+    expected_size = int(release.get("binary_size", 0) or 0)
+    if not SHA256_RE.fullmatch(expected_hash) or expected_size <= 0:
+        raise ManagerError("verified Release binary metadata is invalid")
+
+    release_dir = state_root() / "releases" / f"{tag}-prepared"
+    artifact = release_dir / "sub2api"
+    release_dir.mkdir(parents=True, exist_ok=True)
+    if not artifact.is_file() or sha256_file(artifact) != expected_hash:
+        temporary = release_dir / f".sub2api.{os.getpid()}.download"
+        try:
+            download(str(release.get("binary_url", "")), temporary)
+            if temporary.stat().st_size != expected_size:
+                raise ManagerError("downloaded Release binary size mismatch")
+            if sha256_file(temporary) != expected_hash:
+                raise ManagerError("downloaded Release binary checksum mismatch")
+            temporary.chmod(0o750)
+            os.replace(temporary, artifact)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                temporary.unlink()
+    artifact.chmod(0o750)
+
+    result: dict[str, Any] = {
+        "status": "ready",
+        "version": version,
+        "channel": "overdraft",
+        "source_commit": str(release.get("source_commit", "")),
+        "fork_commit": str(release.get("source_commit", "")),
+        "release_tag": tag,
+        "release_url": str(release.get("html_url", "")),
+        "workflow_url": str(workflow.get("html_url", "")),
+        "artifact": str(artifact),
+        "binary_sha256": expected_hash,
+        "binary_size": expected_size,
+        "prepared_at": now_utc(),
+        "database_compatibility": "ci-migration-tests-passed",
+        "source_mode": "verified-github-release",
+        "tests": "passed",
+    }
+    write_json_atomic(release_dir / "build.json", result)
+    write_json_atomic(prepared_update_path(), result)
+    write_json_atomic(patch_state_path(version, "overdraft"), result | {"status": "prepared"})
+    return result
 
 
 def prepare_candidate(
@@ -1699,14 +1907,14 @@ def apply_prepared() -> dict[str, Any]:
 
 
 def auto_run() -> dict[str, Any]:
-    """Check both channels and build a candidate without changing the live app."""
+    """Monitor the builder and stage a verified Release without local compilation."""
     existing = auto_update_status()
     if not bool(existing.get("enabled", True)):
         return write_auto_update_status(
             status="disabled",
             last_result="disabled",
             progress=0,
-            stage="自动更新已停用",
+            stage="Release 监控已停用",
             last_error="",
             finished_at=now_utc(),
         ) | {"status": "disabled", "enabled": False}
@@ -1714,50 +1922,72 @@ def auto_run() -> dict[str, Any]:
     started = now_utc()
     write_auto_update_status(
         status="checking",
-        progress=0,
-        stage="检查官方和透支来源",
+        progress=10,
+        stage="检查 GitHub 构建工作流和已验证 Release",
         last_started_at=started,
         last_error="",
     )
     try:
         checked = check_update("overdraft")
         summary = auto_check_summary(checked)
+        workflow = checked.get("workflow", {})
+        if not isinstance(workflow, dict):
+            raise ManagerError("builder workflow status is missing")
         write_auto_update_status(
             status="checked",
-            progress=3,
-            stage="检查完成，准备判断是否需要编译",
+            progress=25,
+            stage="仓库状态检查完成",
             last_checked_at=now_utc(),
             last_check=summary,
         )
-        overdraft = checked.get("channels", {}).get("overdraft", {})
-        if not isinstance(overdraft, dict):
-            raise ManagerError("自动更新检查未返回透支通道状态")
-        if overdraft.get("patch_error") or overdraft.get("patch_available") is False:
-            message = str(overdraft.get("patch_error") or "当前官方版本没有可重放的透支补丁")
+        if workflow.get("failed") is True:
+            message = (
+                f"GitHub 融合编译失败：{workflow.get('conclusion') or 'unknown'}; "
+                f"{workflow.get('html_url') or 'no run URL'}"
+            )
             return write_auto_update_status(
-                status="blocked",
-                last_result="blocked_patch",
+                status="failed",
+                last_result="build_failed",
+                progress=0,
+                stage="GitHub 融合编译失败，服务器保持旧版",
                 last_error=message[:1000],
+                prepared=prepared_update(),
                 finished_at=now_utc(),
-            ) | {"status": "blocked", "reason": "patch_unavailable", "error": message, "check": summary}
-        if overdraft.get("has_update") is not True:
-            prepared = prepared_update()
-            if prepared.get("status") == "ready" and Path(str(prepared.get("artifact", ""))).is_file():
-                return write_auto_update_status(
-                    status="ready",
-                    last_result="ready",
-                    progress=100,
-                    stage="编译包已准备就绪，等待手动应用",
-                    last_error="",
-                    prepared=prepared,
-                    finished_at=now_utc(),
-                ) | {"status": "ready", "prepared": prepared, "check": summary}
+            ) | {"status": "failed", "reason": "builder_failed", "error": message, "check": summary}
+        if workflow.get("status") != "completed":
+            return write_auto_update_status(
+                status="building",
+                last_result="building",
+                progress=40,
+                stage="GitHub 正在融合编译，服务器无需本地编译",
+                last_error="",
+                prepared=prepared_update(),
+                finished_at=now_utc(),
+            ) | {"status": "building", "check": summary}
+        if workflow.get("conclusion") != "success":
+            raise ManagerError(
+                f"latest builder workflow concluded with {workflow.get('conclusion') or 'unknown'}"
+            )
+        if checked.get("official_ahead") is True:
+            official = checked.get("official", {})
+            version = official.get("version", "unknown") if isinstance(official, dict) else "unknown"
+            return write_auto_update_status(
+                status="waiting_builder",
+                last_result="waiting_builder",
+                progress=30,
+                stage=f"官方 {version} 已发布，等待 GitHub 自动融合编译",
+                last_error="",
+                prepared=prepared_update(),
+                finished_at=now_utc(),
+            ) | {"status": "waiting_builder", "check": summary}
+        if checked.get("has_update") is not True:
             return write_auto_update_status(
                 status="idle",
                 last_result="no_update",
-                progress=0,
-                stage="当前没有新的可编译版本",
+                progress=100,
+                stage="当前运行版本与仓库已验证 Release 一致",
                 last_error="",
+                prepared={},
                 finished_at=now_utc(),
             ) | {"status": "no_update", "check": summary}
 
@@ -1767,35 +1997,25 @@ def auto_run() -> dict[str, Any]:
                 status="ready",
                 last_result="ready",
                 progress=100,
-                stage="编译包已准备就绪，等待手动应用",
+                stage="已验证 Release 已下载，等待手动应用",
                 last_error="",
                 prepared=prepared,
                 finished_at=now_utc(),
             ) | {"status": "ready", "prepared": prepared, "check": summary}
 
         write_auto_update_status(
-            status="building",
-            last_result="building",
-            progress=4,
-            stage="开始临时目录编译，不会替换当前版本",
+            status="downloading",
+            last_result="downloading",
+            progress=60,
+            stage="下载仓库已验证原生候选包",
             prepared={},
         )
-
-        def progress(value: int, stage: str) -> None:
-            write_auto_update_status(
-                status="building" if value < 100 else "ready",
-                last_result="building" if value < 100 else "ready",
-                progress=value,
-                stage=stage,
-                last_error="",
-            )
-
-        prepared = prepare_candidate(None, None, "overdraft", progress=progress)
+        prepared = prepare_release_candidate(checked)
         return write_auto_update_status(
             status="ready",
             last_result="ready",
             progress=100,
-            stage="编译包已准备就绪，等待手动应用",
+            stage="已验证 Release 已下载，等待手动应用",
             last_error="",
             prepared=prepared,
             finished_at=now_utc(),
@@ -1806,8 +2026,9 @@ def auto_run() -> dict[str, Any]:
             status="failed",
             last_result="failed",
             progress=0,
-            stage="自动编译失败，当前版本保持运行",
+            stage="仓库监控失败，服务器保持旧版",
             last_error=message,
+            prepared=prepared_update(),
             finished_at=now_utc(),
         ) | {"status": "failed", "error": message}
 
@@ -1963,7 +2184,7 @@ def main() -> int:
                 return set_auto_update(args.value == "on")
             else:
                 raise ManagerError(f"unsupported command: {args.command}")
-        # Status reads remain available while a long compile holds the writer lock.
+        # Status reads remain available while monitoring or a Release download holds the writer lock.
         if args.command in {"status", "auto-status"}:
             result = dispatch()
         else:

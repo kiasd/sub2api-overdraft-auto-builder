@@ -14,7 +14,7 @@ DROPIN_DIR="/etc/systemd/system/sub2api.service.d"
 
 install -d -m 0750 -o sub2api -g sub2api "$PLUGIN_DIR" "$STATE_DIR"
 cp -a "$SOURCE_DIR/." "$PLUGIN_DIR/"
-chmod 0750 "$PLUGIN_DIR/manager.sh" "$PLUGIN_DIR/manager.py" "$PLUGIN_DIR/auto_update.py"
+chmod 0750 "$PLUGIN_DIR/manager.sh" "$PLUGIN_DIR/manager.py" "$PLUGIN_DIR/auto_update.py" "$PLUGIN_DIR/release_monitor.py"
 chown -R sub2api:sub2api "$PLUGIN_DIR" "$STATE_DIR"
 
 if [[ ! -f "$STATE_DIR/runtime.env" ]]; then
@@ -29,7 +29,7 @@ fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
   install -m 0640 -o root -g sub2api "$SOURCE_DIR/config/manager.env.example" "$ENV_FILE"
-  echo "created $ENV_FILE; set the PostgreSQL password before any upgrade" >&2
+  echo "created $ENV_FILE; set the PostgreSQL password before applying any Release" >&2
 fi
 
 install -d -m 0755 "$DROPIN_DIR"
@@ -39,6 +39,5 @@ install -m 0644 "$SOURCE_DIR/systemd/sub2api-overdraft-auto-update.timer" /etc/s
 systemctl daemon-reload
 systemctl enable --now sub2api-overdraft-auto-update.timer
 
-echo "plugin files installed; automatic 3-5 hour update timer is enabled"
-echo "next: review $ENV_FILE, then run $PLUGIN_DIR/manager.sh verify 0.1.178 --channel official"
-echo "overdraft build: $PLUGIN_DIR/manager.sh verify 0.1.178 --channel overdraft"
+echo "plugin files installed; verified Release monitor is enabled every 3-5 hours"
+echo "the server no longer compiles Sub2API locally"

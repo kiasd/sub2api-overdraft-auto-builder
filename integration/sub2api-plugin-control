@@ -20,10 +20,8 @@ source "$ENV_FILE"
 set +a
 export HOME="$STATE_ROOT"
 export XDG_CACHE_HOME="$STATE_ROOT/cache"
-export GOCACHE="$STATE_ROOT/go-build-cache"
-export GOMODCACHE="$STATE_ROOT/go-mod-cache"
-export PATH="/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
-install -d -o sub2api -g sub2api -m 0750 "$HOME" "$XDG_CACHE_HOME" "$GOCACHE" "$GOMODCACHE"
+export PATH="/usr/local/bin:/usr/bin:/bin"
+install -d -o sub2api -g sub2api -m 0750 "$HOME" "$XDG_CACHE_HOME"
 cd "$STATE_ROOT"
 
 run_manager() {
@@ -44,7 +42,7 @@ restart_with_fallback() {
 
 action="${1:-}"
 case "$action" in
-  status|check-update|sync-patches|auto-status)
+  status|check-update|auto-status)
     [[ "$#" -eq 1 ]]
       exec /usr/sbin/runuser --user sub2api --preserve-environment -- "$MANAGER" "$action"
     ;;
@@ -63,22 +61,6 @@ case "$action" in
     printf '%s\n' "$result"
     restart_with_fallback
     run_manager auto-finish
-    ;;
-  upgrade)
-    [[ "$#" -le 2 ]]
-    channel="${2:-overdraft}"
-    [[ "$channel" == "official" || "$channel" == "overdraft" ]]
-    result="$(run_manager upgrade --channel "$channel")"
-    printf '%s\n' "$result"
-    if [[ "$result" != *'"status": "already_up_to_date"'* ]]; then
-      restart_with_fallback
-    fi
-    ;;
-  switch)
-    [[ "$#" -eq 2 ]]
-    [[ "$2" == "official" || "$2" == "overdraft" ]]
-    run_manager switch "$2"
-    restart_with_fallback
     ;;
   rollback)
     [[ "$#" -eq 1 ]]
