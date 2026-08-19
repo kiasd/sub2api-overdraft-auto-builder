@@ -146,7 +146,7 @@ class ManagerTests(unittest.TestCase):
             (source / "frontend").mkdir(parents=True)
             result = manager.apply_ui_overlay(source, "0.1.178")
             self.assertEqual(result["ui_overlay_id"], "anime-control-room-v1")
-            self.assertEqual(result["ui_overlay_files"], "10")
+            self.assertEqual(result["ui_overlay_files"], "13")
             self.assertTrue((source / "frontend/src/style.css").is_file())
             self.assertTrue((source / "frontend/src/components/layout/AppSidebar.vue").is_file())
             self.assertTrue((source / "frontend/src/views/admin/DashboardView.vue").is_file())
@@ -172,6 +172,37 @@ class ManagerTests(unittest.TestCase):
             with mock.patch.object(manager, "UI_OVERLAY_DIR", overlay_root):
                 with self.assertRaises(manager.ManagerError):
                     manager.select_ui_overlay("0.1.178")
+
+    def test_ui_version_badge_is_official_and_read_only(self):
+        sidebar = (
+            ROOT
+            / "payload/ui/0.1.178/frontend/src/components/layout/AppSidebar.vue"
+        ).read_text(encoding="utf-8")
+        component = (
+            ROOT
+            / "payload/ui/0.1.178/frontend/src/components/common/OfficialVersionBadge.vue"
+        ).read_text(encoding="utf-8")
+        helper = (
+            ROOT / "payload/ui/0.1.178/frontend/src/components/common/officialVersion.ts"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("<OfficialVersionBadge", sidebar)
+        self.assertNotIn("@/components/common/VersionBadge.vue", sidebar)
+        self.assertIn("Wei-Shaw/sub2api", helper)
+        self.assertIn("releases/latest", helper)
+        self.assertIn("officialBaseVersion", component)
+        self.assertIn("version.refresh", component)
+        self.assertIn("version.viewRelease", component)
+        self.assertNotIn("version.viewUpdate", component)
+        for write_action in (
+            "updateAPI",
+            "performUpdate",
+            "restartService",
+            "getRollbackVersions",
+            "rollbackAPI",
+            "copyToClipboard",
+        ):
+            self.assertNotIn(write_action, component)
 
     def test_frontend_test_command_only_excludes_known_upstream_mismatch(self):
         with tempfile.TemporaryDirectory() as temporary:

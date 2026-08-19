@@ -21,7 +21,19 @@
     },
     {
       "path": "frontend/src/components/layout/AppSidebar.vue",
-      "sha256": "d3b8d7637a05f349ef957620b79fddcaa1c93479ba6653c4372fa8a8a4ced9cd"
+      "sha256": "99770f76e571ff5316de26e7c71f96c95376c2b27cac702b3662859ee21f80d0"
+    },
+    {
+      "path": "frontend/src/components/common/OfficialVersionBadge.vue",
+      "sha256": "ad1a1159c2e8243d3ea24649b6e59b39ec12283f405fcd7666d832c418288f81"
+    },
+    {
+      "path": "frontend/src/components/common/officialVersion.ts",
+      "sha256": "de0666804d8d3a5966fd5f7d86f0b3a5e1cd57fec56ccc9c9cc84e3df59cd3c6"
+    },
+    {
+      "path": "frontend/src/components/common/officialVersion.spec.ts",
+      "sha256": "057d77335509ba12f04f2bfd7390b6d985982198e0beeea5972bb6254165f012"
     },
     {
       "path": "frontend/src/components/layout/AuthLayout.vue",

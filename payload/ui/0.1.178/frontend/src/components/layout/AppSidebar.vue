@@ -25,7 +25,7 @@
           {{ siteName }}
         </router-link>
         <!-- Version Badge -->
-        <VersionBadge :version="siteVersion" />
+        <OfficialVersionBadge :version="siteVersion" />
       </div>
     </div>
 
@@ -201,7 +201,7 @@ import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'v
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
-import VersionBadge from '@/components/common/VersionBadge.vue'
+import OfficialVersionBadge from '@/components/common/OfficialVersionBadge.vue'
 import supportMascot from '@/assets/anime/support-mascot.png'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { sanitizeUrl } from '@/utils/url'
