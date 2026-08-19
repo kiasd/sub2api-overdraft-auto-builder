@@ -146,8 +146,20 @@ class ManagerTests(unittest.TestCase):
             (source / "frontend").mkdir(parents=True)
             result = manager.apply_ui_overlay(source, "0.1.178")
             self.assertEqual(result["ui_overlay_id"], "anime-control-room-v1")
-            self.assertEqual(result["ui_overlay_files"], "13")
+            self.assertEqual(result["ui_overlay_files"], "17")
             self.assertTrue((source / "frontend/src/style.css").is_file())
+            self.assertTrue(
+                (
+                    source
+                    / "frontend/src/components/admin/account/AccountTableFilters.vue"
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    source
+                    / "frontend/src/components/user/dashboard/UserDashboardStats.vue"
+                ).is_file()
+            )
             self.assertTrue((source / "frontend/src/components/layout/AppSidebar.vue").is_file())
             self.assertTrue((source / "frontend/src/views/admin/DashboardView.vue").is_file())
             with self.assertRaises(manager.ManagerError):

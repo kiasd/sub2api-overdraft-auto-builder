@@ -9,7 +9,23 @@
     },
     {
       "path": "frontend/src/style.css",
-      "sha256": "3165cf5150aa59c1e25547015dc946c3658e43a209f278c6ea963a63931d1033"
+      "sha256": "87bc45dde55a13ee889a5fa691f40ce192d8bf433329191093b4d974a37ae62d"
+    },
+    {
+      "path": "frontend/src/components/admin/account/AccountTableFilters.vue",
+      "sha256": "663a116c3b0d279e1abe75ea79611308fb262e3d2fdf187eba748ea0f5a228db"
+    },
+    {
+      "path": "frontend/src/components/admin/account/__tests__/AccountTableToolbarLayout.spec.ts",
+      "sha256": "f4436c7b75c68326ba5ca8a1da7ad7a2b4df63d3b222bcd74af26979465b831e"
+    },
+    {
+      "path": "frontend/src/components/user/dashboard/UserDashboardStats.vue",
+      "sha256": "ef188d96898d016f7867019465f7cbe8c910edbeca1267609f59a2018cc24c47"
+    },
+    {
+      "path": "frontend/src/components/user/dashboard/__tests__/UserDashboardStatsResponsive.spec.ts",
+      "sha256": "8d6795b59bff8d4ed827ffed07d4ef961d3a47a15afeb0dae92ba892b4feb09d"
     },
     {
       "path": "frontend/src/components/layout/AppLayout.vue",
@@ -25,7 +41,7 @@
     },
     {
       "path": "frontend/src/components/common/OfficialVersionBadge.vue",
-      "sha256": "ad1a1159c2e8243d3ea24649b6e59b39ec12283f405fcd7666d832c418288f81"
+      "sha256": "19be19bebb41fef47207c4ee23c9bad2dd94aefaedfc80a231e2210d2bbd7c2a"
     },
     {
       "path": "frontend/src/components/common/officialVersion.ts",
@@ -33,7 +49,7 @@
     },
     {
       "path": "frontend/src/components/common/officialVersion.spec.ts",
-      "sha256": "057d77335509ba12f04f2bfd7390b6d985982198e0beeea5972bb6254165f012"
+      "sha256": "027ac8d6a7e7e6f48f2229a0b70b2cc95b9101f3e56f1415820de82aebb0d302"
     },
     {
       "path": "frontend/src/components/layout/AuthLayout.vue",

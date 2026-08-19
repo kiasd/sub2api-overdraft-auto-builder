@@ -5,12 +5,16 @@
         type="button"
         class="flex max-w-full items-center gap-1.5 rounded-lg bg-gray-100 px-2 py-1 text-xs text-gray-600 transition-colors hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700"
         :class="hasUpdate ? 'text-amber-700 dark:text-amber-400' : ''"
-        :title="checked && hasUpdate ? t('version.updateAvailable') : t('version.currentVersion')"
+        :title="hasUpdate ? t('version.updateAvailable') : t('version.currentVersion')"
         @click.stop="dropdownOpen = !dropdownOpen"
       >
         <span v-if="fullVersion" class="truncate font-medium">v{{ fullVersion }}</span>
-        <span v-else class="h-3 w-12 animate-pulse rounded bg-gray-200 dark:bg-dark-600"></span>
-        <span v-if="checked && hasUpdate" class="relative flex h-2 w-2 flex-shrink-0">
+        <span
+          v-else-if="loading"
+          class="h-3 w-12 animate-pulse rounded bg-gray-200 dark:bg-dark-600"
+        ></span>
+        <span v-else class="font-medium">--</span>
+        <span v-if="hasUpdate" class="relative flex h-2 w-2 flex-shrink-0">
           <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"></span>
           <span class="relative inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
         </span>
@@ -48,7 +52,8 @@
                   {{ officialCurrentVersion ? `v${officialCurrentVersion}` : '--' }}
                 </span>
                 <span
-                  v-if="checked && !hasUpdate"
+                  v-if="isUpToDate"
+                  data-testid="version-up-to-date"
                   class="flex h-5 w-5 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30"
                 >
                   <Icon name="check" size="xs" :stroke-width="2.5" class="text-green-600 dark:text-green-400" />
@@ -59,8 +64,20 @@
                   <span class="truncate">{{ customBuildLabel }} · v{{ fullVersion }}</span>
                 </span>
               </div>
-              <p v-if="checked" class="mt-2 text-xs text-gray-500 dark:text-dark-400">
+              <p v-if="loading" class="mt-2 text-xs text-gray-500 dark:text-dark-400">
+                {{ loadingLabel }}
+              </p>
+              <p
+                v-else-if="hasComparableVersions"
+                class="mt-2 text-xs text-gray-500 dark:text-dark-400"
+              >
                 {{ hasUpdate ? `${t('version.latestVersion')}: v${latestVersion}` : t('version.upToDate') }}
+              </p>
+              <p
+                v-else-if="!errorMessage"
+                class="mt-2 text-xs text-gray-500 dark:text-dark-400"
+              >
+                {{ versionUnavailableLabel }}
               </p>
             </div>
 
@@ -95,7 +112,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useAuthStore } from '@/stores'
+import { useAppStore, useAuthStore } from '@/stores'
 import Icon from '@/components/icons/Icon.vue'
 import {
   OFFICIAL_RELEASES_API,
@@ -111,23 +128,34 @@ const props = defineProps<{
 
 const { locale, t } = useI18n()
 const authStore = useAuthStore()
+const appStore = useAppStore()
 const rootRef = ref<HTMLElement | null>(null)
 const dropdownOpen = ref(false)
 const loading = ref(false)
-const checked = ref(false)
+const refreshedSettingsVersion = ref('')
 const latestVersion = ref('')
 const releaseUrl = ref(OFFICIAL_RELEASES_PAGE)
 const errorMessage = ref('')
 
 const isAdmin = computed(() => authStore.isAdmin)
-const fullVersion = computed(() => (props.version?.trim() || '').replace(/^v/i, ''))
+const suppliedVersion = computed(() => props.version?.trim() || '')
+const fullVersion = computed(() =>
+  (suppliedVersion.value || refreshedSettingsVersion.value || appStore.siteVersion || '').replace(
+    /^v/i,
+    ''
+  )
+)
 const officialCurrentVersion = computed(() => officialBaseVersion(fullVersion.value))
 const isFusionBuild = computed(
   () => !!fullVersion.value && fullVersion.value !== officialCurrentVersion.value
 )
-const hasUpdate = computed(
-  () =>
-    compareOfficialVersions(officialCurrentVersion.value, latestVersion.value) === -1
+const versionComparison = computed(() =>
+  compareOfficialVersions(officialCurrentVersion.value, latestVersion.value)
+)
+const hasComparableVersions = computed(() => versionComparison.value !== null)
+const hasUpdate = computed(() => versionComparison.value === -1)
+const isUpToDate = computed(
+  () => versionComparison.value !== null && versionComparison.value >= 0
 )
 const customBuildLabel = computed(() =>
   String(locale.value).toLowerCase().startsWith('zh') ? '自用构建' : 'Custom build'
@@ -137,13 +165,43 @@ const checkFailedLabel = computed(() =>
     ? '检查官方版本失败'
     : 'Official version check failed'
 )
+const currentVersionFailedLabel = computed(() =>
+  String(locale.value).toLowerCase().startsWith('zh')
+    ? '无法获取当前版本'
+    : 'Unable to load the current version'
+)
+const loadingLabel = computed(() =>
+  String(locale.value).toLowerCase().startsWith('zh')
+    ? '正在加载版本信息'
+    : 'Loading version information'
+)
+const versionUnavailableLabel = computed(() =>
+  String(locale.value).toLowerCase().startsWith('zh')
+    ? '版本信息暂不可用'
+    : 'Version information is unavailable'
+)
+
+async function loadCurrentVersion(): Promise<void> {
+  if (suppliedVersion.value) {
+    if (!officialCurrentVersion.value) throw new Error(currentVersionFailedLabel.value)
+    return
+  }
+
+  const settings = await appStore.fetchPublicSettings(true)
+  if (!settings) throw new Error(currentVersionFailedLabel.value)
+  refreshedSettingsVersion.value = settings.version?.trim() || appStore.siteVersion || ''
+  if (!officialCurrentVersion.value) throw new Error(currentVersionFailedLabel.value)
+}
 
 async function refreshOfficialRelease(): Promise<void> {
   if (!isAdmin.value || loading.value) return
   loading.value = true
   errorMessage.value = ''
+  latestVersion.value = ''
+  releaseUrl.value = OFFICIAL_RELEASES_PAGE
 
   try {
+    await loadCurrentVersion()
     const response = await fetch(OFFICIAL_RELEASES_API, {
       cache: 'no-store',
       headers: { Accept: 'application/vnd.github+json' }
@@ -153,10 +211,12 @@ async function refreshOfficialRelease(): Promise<void> {
     if (!release) throw new Error('Invalid official release response')
     latestVersion.value = release.version
     releaseUrl.value = release.url
-    checked.value = true
   } catch (error: unknown) {
     const detail = error instanceof Error ? error.message : String(error)
-    errorMessage.value = `${checkFailedLabel.value}: ${detail}`
+    errorMessage.value =
+      detail === currentVersionFailedLabel.value
+        ? currentVersionFailedLabel.value
+        : `${checkFailedLabel.value}: ${detail}`
   } finally {
     loading.value = false
   }

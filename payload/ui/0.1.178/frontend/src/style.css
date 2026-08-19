@@ -3030,6 +3030,48 @@
   --metric-color: var(--anime-cyan);
 }
 
+.user-stat-grid > * {
+  min-width: 0;
+}
+
+.anime-console .user-stat-card {
+  min-width: 0;
+  min-height: 112px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.anime-console .user-stat-row {
+  min-width: 0;
+  height: 100%;
+}
+
+.anime-console .user-stat-icon {
+  flex: 0 0 auto;
+}
+
+.anime-console .user-stat-body,
+.anime-console .user-stat-value,
+.anime-console .user-stat-detail {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.anime-console .user-stat-value,
+.anime-console .user-stat-detail {
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.anime-console .user-stat-value {
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.anime-console .user-stat-detail {
+  line-height: 1.4;
+}
+
 .anime-metric-grid {
   gap: 14px;
 }
@@ -3384,6 +3426,16 @@
 
   .anime-console .anime-metric-card {
     min-height: 96px;
+  }
+}
+
+@media (max-width: 639px) {
+  .anime-console .user-stat-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .anime-console .user-stat-card {
+    min-height: 104px;
   }
 }
 
