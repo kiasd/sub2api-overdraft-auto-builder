@@ -25,10 +25,10 @@
       "source_version": "0.1.178",
       "target_version": "0.1.178"
     },
-    "published_at": "2026-08-19T06:29:11+00:00",
+    "published_at": "2026-08-19T07:05:31+00:00",
     "release_tag": "fusion-v0.1.178-overdraft.1-e0c48a19-45e40b4f-u0ca66d07",
     "release_version": "0.1.178-overdraft.1",
-    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/32223147862"
+    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/32225656246"
   },
   "schema": 1
 }
