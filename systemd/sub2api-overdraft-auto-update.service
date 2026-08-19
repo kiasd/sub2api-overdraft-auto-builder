@@ -1,0 +1,13 @@
+[Unit]
+Description=Sub2API native overdraft automatic update worker
+Wants=network-online.target
+After=network-online.target sub2api.service
+ConditionPathExists=/opt/sub2api/plugins/weekly-overdraft/auto_update.py
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/sub2api/plugins/weekly-overdraft/auto_update.py
+EnvironmentFile=-/etc/sub2api/weekly-overdraft-manager.env
+TimeoutStartSec=10800
+NoNewPrivileges=false

@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.png binary
+*.gz binary
+*.patch text eol=lf
+*.sh text eol=lf

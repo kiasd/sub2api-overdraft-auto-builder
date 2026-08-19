@@ -1,0 +1,44 @@
+{
+  "id": "sub2api-overdraft-native-manager",
+  "name": "Sub2API Official and Overdraft Native Update Manager",
+  "plugin_version": "2.3.2",
+  "official_repository": "Wei-Shaw/sub2api",
+  "official_release": "0.1.178",
+  "upstream_repository": "DeanZFC/sub2api-overdraft",
+  "upstream_branch": "codex-overdraft",
+  "validated_upstream_version": "0.1.178",
+  "validated_fork_reference": "0.1.178-overdraft.1",
+  "validated_upstream_sources": {
+    "official-0.1.178": {
+      "repository": "Wei-Shaw/sub2api",
+      "commit": "e0c48a19ed794a565e3858662520afe0a1f9f0ba"
+    },
+    "0.1.178-overdraft.1": {
+      "branch": "codex-overdraft",
+      "commit": "45e40b4fb2d49e0a037bd3a5b2dc1dd27e528065",
+      "archive_sha256": "6d87d8b0f0693e26028f8045e085d4701385afd335c1ac206d7ae9892b2780a6",
+      "embedded_version": "0.1.178"
+    }
+  },
+  "update_strategy": "official-release-plus-versioned-patch-with-randomized-auto-build",
+  "channels": ["official", "overdraft"],
+  "patch_directory": "patches",
+  "ui_overlay_directory": "payload/ui",
+  "ui_overlay_policy": "exact match or newest compatible forward replay; fail closed on checksum or build failure",
+  "manager_entrypoint": "manager.sh",
+  "automatic_update": {
+    "default_enabled": true,
+    "min_interval_hours": 3,
+    "max_interval_hours": 5,
+    "systemd_timer": "sub2api-overdraft-auto-update.timer"
+  },
+  "feature_setting": "GATEWAY_CODEX_QUOTA_OVERDRAFT_ENABLED",
+  "requires": {
+    "python": ">=3.10",
+    "go": ">=1.26.6",
+    "node": ">=24",
+    "pnpm": ">=9 <11",
+    "postgresql_client": ">=14",
+    "git": ">=2.40"
+  }
+}

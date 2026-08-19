@@ -1,0 +1,13 @@
+[Unit]
+Description=Randomized 3-5 hour Sub2API overdraft update check
+
+[Timer]
+OnBootSec=3h
+OnUnitActiveSec=3h
+RandomizedDelaySec=2h
+Persistent=true
+AccuracySec=1min
+Unit=sub2api-overdraft-auto-update.service
+
+[Install]
+WantedBy=timers.target

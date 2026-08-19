@@ -1,0 +1,15 @@
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control status
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control check-update
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control sync-patches
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control auto-status
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control set-auto-update on
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control set-auto-update off
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control apply-prepared
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control upgrade
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control upgrade official
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control upgrade overdraft
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control switch official
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control switch overdraft
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control rollback
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control enable-overdraft on
+sub2api-backup ALL=(root) NOPASSWD: /usr/local/sbin/sub2api-plugin-control enable-overdraft off

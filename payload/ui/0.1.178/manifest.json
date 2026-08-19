@@ -1,0 +1,47 @@
+{
+  "overlay_id": "anime-control-room-v1",
+  "target_version": "0.1.178",
+  "apply_after": "official-source-plus-overdraft-patch",
+  "files": [
+    {
+      "path": "frontend/tailwind.config.js",
+      "sha256": "fbe695545fcd5315ad82cfbb40a05008269c6e3aa76698ae3518c7e05ff7577d"
+    },
+    {
+      "path": "frontend/src/style.css",
+      "sha256": "3165cf5150aa59c1e25547015dc946c3658e43a209f278c6ea963a63931d1033"
+    },
+    {
+      "path": "frontend/src/components/layout/AppLayout.vue",
+      "sha256": "9ecf9b380ab7e3269dd241a718fec85f3e43c2826d929d1232f370109d1806ce"
+    },
+    {
+      "path": "frontend/src/components/layout/AppHeader.vue",
+      "sha256": "fa5f9e39629995c0c7027da5860723f911c0ac9de354206e67e0fd5f99638958"
+    },
+    {
+      "path": "frontend/src/components/layout/AppSidebar.vue",
+      "sha256": "d3b8d7637a05f349ef957620b79fddcaa1c93479ba6653c4372fa8a8a4ced9cd"
+    },
+    {
+      "path": "frontend/src/components/layout/AuthLayout.vue",
+      "sha256": "97ba62b49a682fee0e80940471ea5ac16c227c9dee02ab1d97d2cdee28a86f43"
+    },
+    {
+      "path": "frontend/src/views/HomeView.vue",
+      "sha256": "3031d4358e290d50d9dc94342d43987e987e252b9504c1e75b5cdf1a777671b0"
+    },
+    {
+      "path": "frontend/src/views/admin/DashboardView.vue",
+      "sha256": "23856a95c61f50d2aab73bf5f763f4ab655b12d3375b12aa699b1ac30dfc80c8"
+    },
+    {
+      "path": "frontend/src/assets/anime/relay-operator.png",
+      "sha256": "0bac152e8de109d9fbd782742c316d255f9721abcffb0938143c4103d01bd175"
+    },
+    {
+      "path": "frontend/src/assets/anime/support-mascot.png",
+      "sha256": "a5f2f8d7326e23b95c1aa1e9e03da8acb1f3a301fe71293ce9abe3cbde79bcd5"
+    }
+  ]
+}

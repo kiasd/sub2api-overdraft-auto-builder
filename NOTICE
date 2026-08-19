@@ -1,0 +1,16 @@
+Sub2API Fusion Builder
+
+This repository coordinates builds from two independently maintained upstream
+projects. It is not an official release channel for either project.
+
+Official Sub2API:
+  https://github.com/Wei-Shaw/sub2api
+  License: LGPL-3.0
+
+Overdraft feature branch:
+  https://github.com/DeanZFC/sub2api-overdraft/tree/codex-overdraft
+  License: LGPL-3.0
+
+The generated artifacts contain code from those projects plus the versioned UI
+overlay in this repository. See build-metadata.json in each release for exact
+commits, hashes, and the applied overlay mode.

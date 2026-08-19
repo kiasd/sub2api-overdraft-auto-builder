@@ -1,0 +1,252 @@
+name: Detect and build fused native release
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even when the upstream fingerprint is unchanged
+        required: true
+        type: boolean
+        default: true
+      publish:
+        description: Publish or refresh the GitHub release after tests pass
+        required: true
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/auto-build.yml"
+      - "scripts/**"
+      - "manager.py"
+      - "patches/**"
+      - "payload/**"
+      - "plugin.json"
+
+concurrency:
+  group: sub2api-fusion-build
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_build: ${{ steps.detect.outputs.should_build }}
+      official_version: ${{ steps.detect.outputs.official_version }}
+      official_commit: ${{ steps.detect.outputs.official_commit }}
+      fork_version: ${{ steps.detect.outputs.fork_version }}
+      fork_commit: ${{ steps.detect.outputs.fork_commit }}
+      release_version: ${{ steps.detect.outputs.release_version }}
+      release_tag: ${{ steps.detect.outputs.release_tag }}
+      fingerprint: ${{ steps.detect.outputs.fingerprint }}
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve immutable upstream inputs
+        id: detect
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FORCE_BUILD: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.force) }}
+        shell: bash
+        run: |
+          args=()
+          if [[ "$FORCE_BUILD" == "true" ]]; then
+            args+=(--force)
+          fi
+          python3 scripts/detect_updates.py \
+            --state state/upstreams.json \
+            --output build/detection.json \
+            --github-output "$GITHUB_OUTPUT" \
+            "${args[@]}"
+
+      - name: Upload detection snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-detection
+          path: build/detection.json
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout builder without credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download immutable detection snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-detection
+          path: build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Activate pinned pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.28.2 --activate
+          pnpm --version
+
+      - name: Build and test native candidate
+        env:
+          SUB2API_FULL_FRONTEND_TESTS: "1"
+          SUB2API_PNPM: pnpm
+          SUB2API_GO: go
+          GOPROXY: "https://proxy.golang.org,direct"
+          GOSUMDB: "sum.golang.org"
+          GOTOOLCHAIN: local
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: python3 scripts/build_candidate.py --detection build/detection.json --output dist
+
+      - name: Upload verified candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: fused-native-candidate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: [detect, build]
+    if: >-
+      needs.build.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' || inputs.publish)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release renderer
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: fused-native-candidate
+          path: dist
+
+      - name: Render release notes
+        run: python3 scripts/render_release_notes.py dist/build-metadata.json release-notes.md
+
+      - name: Publish idempotent release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.detect.outputs.release_tag }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --notes-file release-notes.md --latest --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/* \
+              --title "Sub2API 融合原生版 ${{ needs.detect.outputs.release_version }}" \
+              --notes-file release-notes.md \
+              --latest \
+              --repo "$GITHUB_REPOSITORY"
+          fi
+
+  record-success:
+    needs: [detect, build, publish]
+    if: needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main with push permission
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download detection snapshot
+        uses: actions/download-artifact@v4
+        with:
+          name: upstream-detection
+          path: build
+
+      - name: Record successful release inputs
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          git pull --rebase origin main
+          python3 scripts/record_success.py build/detection.json state/upstreams.json --run-url "$RUN_URL"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/upstreams.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "chore(state): record ${{ needs.detect.outputs.release_tag }}"
+          git push origin HEAD:main
+
+  report-failure:
+    needs: [detect, build, publish]
+    if: >-
+      always() &&
+      (needs.detect.result == 'failure' || needs.build.result == 'failure' || needs.publish.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Create or update compatibility issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.detect.outputs.release_tag }}
+          OFFICIAL_VERSION: ${{ needs.detect.outputs.official_version }}
+          FORK_VERSION: ${{ needs.detect.outputs.fork_version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          key="${RELEASE_TAG:-run-${GITHUB_RUN_ID}}"
+          title="自动融合构建失败: $key"
+          body=$(cat <<EOF
+          自动检测或融合构建没有通过，因此没有更新成功状态，也没有替换任何服务器程序。
+
+          - 官方版本：${OFFICIAL_VERSION:-未知}
+          - 透支版本：${FORK_VERSION:-未知}
+          - 工作流：$RUN_URL
+
+          请查看失败阶段；通常是上游账户、额度、路由或 UI 文件发生了需要人工适配的变化。
+          EOF
+          )
+          existing=$(gh issue list --repo "$REPOSITORY" --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --repo "$REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$REPOSITORY" --title "$title" --body "$body"
+          fi

@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+MANAGER=/opt/sub2api/plugins/weekly-overdraft/manager.sh
+ENV_FILE=/etc/sub2api/weekly-overdraft-manager.env
+STATE_ROOT=/var/lib/sub2api-weekly-overdraft
+
+if [[ "$EUID" -ne 0 ]]; then
+  printf 'plugin control must run through sudo\n' >&2
+  exit 1
+fi
+if [[ ! -x "$MANAGER" || ! -r "$ENV_FILE" ]]; then
+  printf 'weekly-overdraft manager is not installed\n' >&2
+  exit 1
+fi
+
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+export HOME="$STATE_ROOT"
+export XDG_CACHE_HOME="$STATE_ROOT/cache"
+export GOCACHE="$STATE_ROOT/go-build-cache"
+export GOMODCACHE="$STATE_ROOT/go-mod-cache"
+export PATH="/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
+install -d -o sub2api -g sub2api -m 0750 "$HOME" "$XDG_CACHE_HOME" "$GOCACHE" "$GOMODCACHE"
+cd "$STATE_ROOT"
+
+run_manager() {
+  /usr/sbin/runuser --user sub2api --preserve-environment -- "$MANAGER" "$@"
+}
+
+restart_with_fallback() {
+  if systemctl restart sub2api.service; then
+    systemctl is-active --quiet sub2api.service
+    return
+  fi
+  # A failed candidate health check stages the paired rollback. The second
+  # start applies that pending database/program rollback before launching.
+  systemctl restart sub2api.service || true
+  journalctl -u sub2api.service -n 80 --no-pager >&2
+  return 1
+}
+
+action="${1:-}"
+case "$action" in
+  status|check-update|sync-patches|auto-status)
+    [[ "$#" -eq 1 ]]
+      exec /usr/sbin/runuser --user sub2api --preserve-environment -- "$MANAGER" "$action"
+    ;;
+  set-auto-update)
+    [[ "$#" -eq 2 ]]
+    [[ "$2" == "on" || "$2" == "off" ]]
+    exec /usr/sbin/runuser --user sub2api --preserve-environment -- "$MANAGER" "$action" "$2"
+    ;;
+  auto-run)
+    [[ "$#" -eq 1 ]]
+    run_manager auto-run
+    ;;
+  apply-prepared)
+    [[ "$#" -eq 1 ]]
+    result="$(run_manager apply-prepared)"
+    printf '%s\n' "$result"
+    restart_with_fallback
+    run_manager auto-finish
+    ;;
+  upgrade)
+    [[ "$#" -le 2 ]]
+    channel="${2:-overdraft}"
+    [[ "$channel" == "official" || "$channel" == "overdraft" ]]
+    result="$(run_manager upgrade --channel "$channel")"
+    printf '%s\n' "$result"
+    if [[ "$result" != *'"status": "already_up_to_date"'* ]]; then
+      restart_with_fallback
+    fi
+    ;;
+  switch)
+    [[ "$#" -eq 2 ]]
+    [[ "$2" == "official" || "$2" == "overdraft" ]]
+    run_manager switch "$2"
+    restart_with_fallback
+    ;;
+  rollback)
+    [[ "$#" -eq 1 ]]
+    run_manager rollback previous
+    restart_with_fallback
+    ;;
+  enable-overdraft)
+    [[ "$#" -eq 2 && ( "$2" == "on" || "$2" == "off" ) ]]
+    run_manager enable-overdraft "$2"
+    restart_with_fallback
+    ;;
+  *)
+    printf 'unsupported plugin action\n' >&2
+    exit 2
+    ;;
+esac
