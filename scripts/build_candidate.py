@@ -65,6 +65,41 @@ def safe_relative_path(value: str) -> Path:
     return relative
 
 
+def verify_overlay_source_state(destination: Path, entry: dict[str, Any], relative: Path) -> None:
+    has_source_hash = "source_sha256" in entry
+    source_missing = entry.get("source_missing")
+    if has_source_hash and source_missing:
+        raise BuildError(
+            f"UI overlay source state is ambiguous: {relative.as_posix()}"
+        )
+    if has_source_hash:
+        expected = str(entry.get("source_sha256", "")).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise BuildError(
+                f"UI overlay source checksum is invalid: {relative.as_posix()}"
+            )
+        if destination.is_symlink() or not destination.is_file():
+            raise BuildError(
+                f"UI overlay source file is missing: {relative.as_posix()}"
+            )
+        actual = manager.sha256_file(destination)
+        if actual != expected:
+            raise BuildError(
+                "UI overlay source changed and needs adaptation: "
+                f"{relative.as_posix()}"
+            )
+    elif source_missing is not None:
+        if source_missing is not True:
+            raise BuildError(
+                f"UI overlay source_missing must be true: {relative.as_posix()}"
+            )
+        if destination.exists() or destination.is_symlink():
+            raise BuildError(
+                "UI overlay source unexpectedly exists and needs adaptation: "
+                f"{relative.as_posix()}"
+            )
+
+
 def apply_compatible_overlay(source: Path, detection: dict[str, Any]) -> dict[str, Any]:
     overlay = detection.get("overlay")
     if not isinstance(overlay, dict) or not overlay.get("available"):
@@ -81,20 +116,29 @@ def apply_compatible_overlay(source: Path, detection: dict[str, Any]) -> dict[st
         raise BuildError("UI overlay manifest has no files")
 
     source_root = source.resolve()
-    applied: list[str] = []
+    candidates: list[tuple[Path, Path, Path]] = []
     for entry in files:
         if not isinstance(entry, dict):
             raise BuildError("UI overlay manifest contains a non-object entry")
         relative = safe_relative_path(str(entry.get("path", "")))
         payload = directory / relative
         expected = str(entry.get("sha256", "")).lower()
-        if not payload.is_file() or manager.sha256_file(payload) != expected:
+        if (
+            not payload.is_file()
+            or payload.is_symlink()
+            or manager.sha256_file(payload) != expected
+        ):
             raise BuildError(f"UI overlay checksum failed: {relative.as_posix()}")
         destination = (source_root / relative).resolve()
         if destination != source_root and source_root not in destination.parents:
             raise BuildError(f"UI overlay escapes source tree: {relative.as_posix()}")
         if destination.exists() and destination.is_symlink():
             raise BuildError(f"refusing to replace a symlink: {relative.as_posix()}")
+        verify_overlay_source_state(destination, entry, relative)
+        candidates.append((relative, payload, destination))
+
+    applied: list[str] = []
+    for relative, payload, destination in candidates:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(payload, destination)
         applied.append(relative.as_posix())

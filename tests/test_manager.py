@@ -163,7 +163,7 @@ class ManagerTests(unittest.TestCase):
             self.assertTrue((source / "frontend/src/components/layout/AppSidebar.vue").is_file())
             self.assertTrue((source / "frontend/src/views/admin/DashboardView.vue").is_file())
             with self.assertRaises(manager.ManagerError):
-                manager.select_ui_overlay("0.1.179")
+                manager.select_ui_overlay("0.1.180")
 
     def test_ui_overlay_rejects_tampering(self):
         with tempfile.TemporaryDirectory() as temporary:

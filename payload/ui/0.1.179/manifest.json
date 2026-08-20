@@ -1,0 +1,92 @@
+{
+  "overlay_id": "anime-control-room-v1.1",
+  "target_version": "0.1.179",
+  "apply_after": "official-source-plus-overdraft-patch",
+  "files": [
+    {
+      "path": "frontend/tailwind.config.js",
+      "sha256": "fbe695545fcd5315ad82cfbb40a05008269c6e3aa76698ae3518c7e05ff7577d",
+      "source_sha256": "717af6397bf3c1b57fee20b15528d1c27d1241e4db686dcf79dba2effb27fb3d"
+    },
+    {
+      "path": "frontend/src/style.css",
+      "sha256": "87bc45dde55a13ee889a5fa691f40ce192d8bf433329191093b4d974a37ae62d",
+      "source_sha256": "2d0e275db9c6466fe66e3a0c1fb399ecde2b454163c36bf4410e4b85a6ec61f3"
+    },
+    {
+      "path": "frontend/src/components/admin/account/AccountTableFilters.vue",
+      "sha256": "05c4c70f2270e209758fbde1bd97d9c7993919db85196a3403b5ccb569cd9a84",
+      "source_sha256": "3906b6db023563296e0878bdabd2b5023ebac178a6de8a042b73e50d099c45fa"
+    },
+    {
+      "path": "frontend/src/components/admin/account/__tests__/AccountTableToolbarLayout.spec.ts",
+      "sha256": "84add7480e510c9c66af982d7fbf09834e016b4fa5a5d02e926166849aac0d91",
+      "source_missing": true
+    },
+    {
+      "path": "frontend/src/components/user/dashboard/UserDashboardStats.vue",
+      "sha256": "ef188d96898d016f7867019465f7cbe8c910edbeca1267609f59a2018cc24c47",
+      "source_sha256": "73c55e8ed36ec1d81505fe295f5f26578a1f265d38649e7cf38813eb7c4d23eb"
+    },
+    {
+      "path": "frontend/src/components/user/dashboard/__tests__/UserDashboardStatsResponsive.spec.ts",
+      "sha256": "8d6795b59bff8d4ed827ffed07d4ef961d3a47a15afeb0dae92ba892b4feb09d",
+      "source_missing": true
+    },
+    {
+      "path": "frontend/src/components/layout/AppLayout.vue",
+      "sha256": "9ecf9b380ab7e3269dd241a718fec85f3e43c2826d929d1232f370109d1806ce",
+      "source_sha256": "b70d197cd962465baa3b063eaba12aef45ebbe61ebf2d0f28f249f43d45487fa"
+    },
+    {
+      "path": "frontend/src/components/layout/AppHeader.vue",
+      "sha256": "fa5f9e39629995c0c7027da5860723f911c0ac9de354206e67e0fd5f99638958",
+      "source_sha256": "0d9bbeff80ff9c899e632346a194f9fcfa2e55055fdc4a0c87149c143a7f9dad"
+    },
+    {
+      "path": "frontend/src/components/layout/AppSidebar.vue",
+      "sha256": "99770f76e571ff5316de26e7c71f96c95376c2b27cac702b3662859ee21f80d0",
+      "source_sha256": "bbaf3ed1d27104224de7678ea048ad959626923897169cf12567555252bde5ca"
+    },
+    {
+      "path": "frontend/src/components/common/OfficialVersionBadge.vue",
+      "sha256": "19be19bebb41fef47207c4ee23c9bad2dd94aefaedfc80a231e2210d2bbd7c2a",
+      "source_missing": true
+    },
+    {
+      "path": "frontend/src/components/common/officialVersion.ts",
+      "sha256": "de0666804d8d3a5966fd5f7d86f0b3a5e1cd57fec56ccc9c9cc84e3df59cd3c6",
+      "source_missing": true
+    },
+    {
+      "path": "frontend/src/components/common/officialVersion.spec.ts",
+      "sha256": "027ac8d6a7e7e6f48f2229a0b70b2cc95b9101f3e56f1415820de82aebb0d302",
+      "source_missing": true
+    },
+    {
+      "path": "frontend/src/components/layout/AuthLayout.vue",
+      "sha256": "97ba62b49a682fee0e80940471ea5ac16c227c9dee02ab1d97d2cdee28a86f43",
+      "source_sha256": "b5e9e67232fcb930e0935f4798e1d4d0aef5e9137d50f4bcceed9cd04989dd4f"
+    },
+    {
+      "path": "frontend/src/views/HomeView.vue",
+      "sha256": "3031d4358e290d50d9dc94342d43987e987e252b9504c1e75b5cdf1a777671b0",
+      "source_sha256": "d20d893ea00fbe0146d2f12438a484aeda3a6c805d0fffac60df4263e7cae9b9"
+    },
+    {
+      "path": "frontend/src/views/admin/DashboardView.vue",
+      "sha256": "23856a95c61f50d2aab73bf5f763f4ab655b12d3375b12aa699b1ac30dfc80c8",
+      "source_sha256": "a2088a03ef980ffc204944416a35dc6a002f36463999d1c3019d18d883f70cef"
+    },
+    {
+      "path": "frontend/src/assets/anime/relay-operator.png",
+      "sha256": "0bac152e8de109d9fbd782742c316d255f9721abcffb0938143c4103d01bd175",
+      "source_missing": true
+    },
+    {
+      "path": "frontend/src/assets/anime/support-mascot.png",
+      "sha256": "cbb5b35d6fab154043bd5765da0df15079b89d8fd5f545c3f65198a1ed75dfd8",
+      "source_missing": true
+    }
+  ]
+}

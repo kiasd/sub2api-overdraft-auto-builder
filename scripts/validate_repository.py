@@ -74,6 +74,22 @@ def validate_overlays() -> list[str]:
             actual = sha256_file(payload)
             if actual != expected:
                 errors.append(f"{manifest_path}: checksum mismatch for {relative}")
+
+            has_source_hash = "source_sha256" in entry
+            source_missing = entry.get("source_missing")
+            if has_source_hash and source_missing:
+                errors.append(f"{manifest_path}: ambiguous source state for {relative}")
+                continue
+            if has_source_hash:
+                expected_source = str(entry.get("source_sha256", "")).lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", expected_source):
+                    errors.append(
+                        f"{manifest_path}: invalid source checksum for {relative}"
+                    )
+            elif source_missing is not None and source_missing is not True:
+                errors.append(
+                    f"{manifest_path}: source_missing must be true for {relative}"
+                )
     return errors
 
 

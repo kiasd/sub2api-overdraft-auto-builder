@@ -62,6 +62,56 @@ class BuilderTests(unittest.TestCase):
             self.assertFalse(result["available"])
             self.assertEqual(result["mode"], "missing")
 
+    def test_0179_overlay_keeps_the_catalog_and_records_source_state(self):
+        root = Path(__file__).resolve().parents[1]
+        overlay = root / "payload" / "ui" / "0.1.179"
+        manifest = json.loads((overlay / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["target_version"], "0.1.179")
+        self.assertTrue(
+            all(
+                ("source_sha256" in entry) != (entry.get("source_missing") is True)
+                for entry in manifest["files"]
+            )
+        )
+        filters = (
+            overlay
+            / "frontend"
+            / "src"
+            / "components"
+            / "admin"
+            / "account"
+            / "AccountTableFilters.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "import { CONCRETE_PLATFORM_OPTIONS } from '@/constants/platforms'",
+            filters,
+        )
+        self.assertIn("...CONCRETE_PLATFORM_OPTIONS", filters)
+        self.assertIn("xl:flex-nowrap", filters)
+
+    def test_overlay_source_state_rejects_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "frontend" / "source.ts"
+            destination.parent.mkdir(parents=True)
+            destination.write_text("original", encoding="utf-8")
+            entry = {"source_sha256": build_candidate.manager.sha256_file(destination)}
+            relative = Path("frontend/source.ts")
+            build_candidate.verify_overlay_source_state(destination, entry, relative)
+
+            destination.write_text("updated", encoding="utf-8")
+            with self.assertRaises(build_candidate.BuildError):
+                build_candidate.verify_overlay_source_state(destination, entry, relative)
+
+            missing = Path(temporary) / "frontend" / "new.ts"
+            build_candidate.verify_overlay_source_state(
+                missing, {"source_missing": True}, Path("frontend/new.ts")
+            )
+            missing.write_text("now exists", encoding="utf-8")
+            with self.assertRaises(build_candidate.BuildError):
+                build_candidate.verify_overlay_source_state(
+                    missing, {"source_missing": True}, Path("frontend/new.ts")
+                )
+
     def test_path_traversal_is_rejected(self):
         for value in ("", ".", "../secret", "frontend/../../secret"):
             with self.subTest(value=value):
