@@ -1,14 +1,14 @@
 {
   "last_success": {
-    "fingerprint": "ca0ea36a2fbb1c4c0cd7b3e7338b9a584ce6bef994b7bb72e26a42fa1ca32eb5",
+    "fingerprint": "bc04e116076b6b914ab48e66cec5a5669e4a3aed7ecf9567db5be57b797c580b",
     "fork": {
       "base_commit": "75f88be5f75c27771836b586f7de1503afa0e3bc",
       "base_version": "0.1.179",
       "branch": "codex-overdraft",
-      "commit": "73ea828a5ffbaef4d39b1162f4c7503511fcc2da",
+      "commit": "5aa4a065f3d6d282d6aa284178148ff3f37c243b",
       "repository": "DeanZFC/sub2api-overdraft",
-      "url": "https://github.com/DeanZFC/sub2api-overdraft/commit/73ea828a5ffbaef4d39b1162f4c7503511fcc2da",
-      "version": "0.1.179-overdraft.1"
+      "url": "https://github.com/DeanZFC/sub2api-overdraft/commit/5aa4a065f3d6d282d6aa284178148ff3f37c243b",
+      "version": "0.1.179-overdraft.2"
     },
     "official": {
       "commit": "75f88be5f75c27771836b586f7de1503afa0e3bc",
@@ -25,10 +25,10 @@
       "source_version": "0.1.179",
       "target_version": "0.1.179"
     },
-    "published_at": "2026-08-20T13:27:37+00:00",
-    "release_tag": "fusion-v0.1.179-overdraft.1-75f88be5-73ea828a-u52b9faf8",
-    "release_version": "0.1.179-overdraft.1",
-    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/32372937761"
+    "published_at": "2026-08-22T04:58:53+00:00",
+    "release_tag": "fusion-v0.1.179-overdraft.2-75f88be5-5aa4a065-u52b9faf8",
+    "release_version": "0.1.179-overdraft.2",
+    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/32552791657"
   },
   "schema": 1
 }
