@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -23,6 +24,18 @@ import manager  # noqa: E402
 
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+TEXT_SOURCE_SUFFIXES = {
+    ".css",
+    ".html",
+    ".js",
+    ".json",
+    ".md",
+    ".ts",
+    ".tsx",
+    ".vue",
+    ".yaml",
+    ".yml",
+}
 
 
 class BuildError(RuntimeError):
@@ -65,6 +78,14 @@ def safe_relative_path(value: str) -> Path:
     return relative
 
 
+def source_sha256(path: Path) -> str:
+    """Hash source text canonically so Windows CRLF cannot cause false drift."""
+    data = path.read_bytes()
+    if path.suffix.lower() in TEXT_SOURCE_SUFFIXES:
+        data = data.replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()
+
+
 def verify_overlay_source_state(destination: Path, entry: dict[str, Any], relative: Path) -> None:
     has_source_hash = "source_sha256" in entry
     source_missing = entry.get("source_missing")
@@ -82,7 +103,7 @@ def verify_overlay_source_state(destination: Path, entry: dict[str, Any], relati
             raise BuildError(
                 f"UI overlay source file is missing: {relative.as_posix()}"
             )
-        actual = manager.sha256_file(destination)
+        actual = source_sha256(destination)
         if actual != expected:
             raise BuildError(
                 "UI overlay source changed and needs adaptation: "

@@ -112,6 +112,18 @@ class BuilderTests(unittest.TestCase):
                     missing, {"source_missing": True}, Path("frontend/new.ts")
                 )
 
+    def test_overlay_source_state_ignores_windows_line_endings_for_text(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "frontend" / "style.css"
+            destination.parent.mkdir(parents=True)
+            destination.write_bytes(b".panel {\n  color: red;\n}\n")
+            entry = {"source_sha256": build_candidate.source_sha256(destination)}
+
+            destination.write_bytes(b".panel {\r\n  color: red;\r\n}\r\n")
+            build_candidate.verify_overlay_source_state(
+                destination, entry, Path("frontend/style.css")
+            )
+
     def test_path_traversal_is_rejected(self):
         for value in ("", ".", "../secret", "frontend/../../secret"):
             with self.subTest(value=value):
