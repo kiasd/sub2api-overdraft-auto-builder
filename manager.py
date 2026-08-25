@@ -50,6 +50,12 @@ BUILDER_API_ROOT = f"https://api.github.com/repos/{BUILDER_REPO}"
 VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+(?:-overdraft\.\d+)?)$")
 FORK_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+-overdraft\.\d+$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+GO_VERSION_RE = re.compile(r"\bgo(?P<major>\d+)\.(?P<minor>\d+)(?:\.(?P<patch>\d+))?\b")
+GO_MOD_VERSION_RE = re.compile(
+    r"^\s*go\s+(?P<major>\d+)\.(?P<minor>\d+)(?:\.(?P<patch>\d+))?\s*(?://.*)?$",
+    re.MULTILINE,
+)
+MINIMUM_GO_VERSION = (1, 26, 0)
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 CHANNELS = ("official", "overdraft")
 PATCH_DIR = Path(os.environ.get("SUB2API_PATCH_DIR", str(PLUGIN_DIR / "patches"))).resolve()
@@ -1001,10 +1007,67 @@ def prepare_source(
     return prepare_official_source(version, work, source_archive, source_commit, apply_patch=True)
 
 
-def verify_tool_versions(go: str, pnpm: str) -> None:
+def format_go_version(version: tuple[int, int, int]) -> str:
+    return ".".join(str(part) for part in version)
+
+
+def parse_go_version(value: str, *, source: str) -> tuple[int, int, int]:
+    match = GO_VERSION_RE.search(value)
+    if not match:
+        raise ManagerError(f"cannot parse Go version from {source}: {value.strip()!r}")
+    return (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch") or 0),
+    )
+
+
+def required_go_version(source: Path) -> tuple[int, int, int]:
+    go_mod = source / "backend" / "go.mod"
+    if not go_mod.is_file() or go_mod.is_symlink():
+        raise ManagerError("candidate source is missing a regular backend/go.mod")
+    try:
+        content = go_mod.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ManagerError("candidate backend/go.mod is not valid UTF-8") from exc
+    match = GO_MOD_VERSION_RE.search(content)
+    if not match:
+        raise ManagerError("candidate backend/go.mod has no valid Go version directive")
+    return (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch") or 0),
+    )
+
+
+def configure_go_toolchain(
+    source: Path,
+    installed: tuple[int, int, int],
+    environment: dict[str, str],
+) -> dict[str, str]:
+    required = required_go_version(source)
+    mode = "installed"
+    if installed < required:
+        # The source commit is already pinned and verified. Let the Go command
+        # obtain exactly the newer toolchain declared by its immutable go.mod.
+        environment["GOTOOLCHAIN"] = "auto"
+        mode = "auto"
+    return {
+        "installed": format_go_version(installed),
+        "required": format_go_version(required),
+        "mode": mode,
+    }
+
+
+def verify_tool_versions(go: str, pnpm: str) -> tuple[int, int, int]:
     go_output = run([go, "version"], capture=True, timeout=20).stdout or ""
-    if "go1.26" not in go_output:
-        raise ManagerError(f"Go 1.26.x is required, got: {go_output.strip()}")
+    go_version = parse_go_version(go_output, source="go version")
+    if go_version < MINIMUM_GO_VERSION:
+        raise ManagerError(
+            "Go "
+            f"{format_go_version(MINIMUM_GO_VERSION)} or newer is required, got: "
+            f"{go_output.strip()}"
+        )
     pnpm_output = (run([pnpm, "--version"], capture=True, timeout=20).stdout or "").strip()
     try:
         pnpm_major = int(pnpm_output.split(".", 1)[0])
@@ -1012,6 +1075,7 @@ def verify_tool_versions(go: str, pnpm: str) -> None:
         raise ManagerError(f"cannot parse pnpm version: {pnpm_output!r}") from exc
     if pnpm_major not in {9, 10}:
         raise ManagerError(f"pnpm 9.x or 10.x is required, got {pnpm_output}")
+    return go_version
 
 
 def install_migration_checker(source: Path) -> Path:
@@ -1036,10 +1100,11 @@ def build_and_test(
     go = os.environ.get("SUB2API_GO", "go")
     pnpm = os.environ.get("SUB2API_PNPM", "pnpm")
     report(5, "检查编译工具")
-    verify_tool_versions(go, pnpm)
-    environment = build_environment()
     frontend = source / "frontend"
     backend = source / "backend"
+    installed_go_version = verify_tool_versions(go, pnpm)
+    environment = build_environment()
+    go_toolchain = configure_go_toolchain(source, installed_go_version, environment)
     started = time.monotonic()
 
     report(10, "安装前端依赖")
@@ -1148,6 +1213,7 @@ def build_and_test(
         "tests": "passed",
         "core_unit_tests": f"{channel} suite passed",
         "frontend_test_exclusions": frontend_test_exclusions,
+        "go_toolchain": go_toolchain,
         "duration_seconds": round(time.monotonic() - started, 3),
     }
 

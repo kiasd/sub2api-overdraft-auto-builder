@@ -229,6 +229,48 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(exclusions, ["src/components/account/__tests__/CreateAccountModal.grok.spec.ts"])
             self.assertEqual(command[-2:], ["--exclude", exclusions[0]])
 
+    def test_go_toolchain_uses_the_immutable_source_requirement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            go_mod = source / "backend" / "go.mod"
+            go_mod.parent.mkdir(parents=True)
+            go_mod.write_text("module example.test/sub2api\n\ngo 1.27.0\n", encoding="utf-8")
+
+            environment = {"GOTOOLCHAIN": "local"}
+            result = manager.configure_go_toolchain(source, (1, 26, 6), environment)
+
+            self.assertEqual(environment["GOTOOLCHAIN"], "auto")
+            self.assertEqual(
+                result,
+                {"installed": "1.26.6", "required": "1.27.0", "mode": "auto"},
+            )
+
+    def test_go_toolchain_keeps_a_sufficient_installed_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            go_mod = source / "backend" / "go.mod"
+            go_mod.parent.mkdir(parents=True)
+            go_mod.write_text("module example.test/sub2api\n\ngo 1.26\n", encoding="utf-8")
+
+            environment = {"GOTOOLCHAIN": "local"}
+            result = manager.configure_go_toolchain(source, (1, 27, 1), environment)
+
+            self.assertEqual(environment["GOTOOLCHAIN"], "local")
+            self.assertEqual(
+                result,
+                {"installed": "1.27.1", "required": "1.26.0", "mode": "installed"},
+            )
+
+    def test_verify_tool_versions_requires_at_least_go_126(self):
+        def run_with_go_version(command, **_kwargs):
+            if command[1] == "version":
+                return mock.Mock(stdout="go version go1.25.9 linux/amd64\n")
+            return mock.Mock(stdout="10.28.2\n")
+
+        with mock.patch.object(manager, "run", side_effect=run_with_go_version):
+            with self.assertRaisesRegex(manager.ManagerError, "1.26.0 or newer"):
+                manager.verify_tool_versions("go", "pnpm")
+
     def test_sync_patch_catalog_keeps_branch_commit_and_hash(self):
         responses = [
             [
