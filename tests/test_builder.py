@@ -31,6 +31,13 @@ class FakeGitHubClient:
 
 
 class BuilderTests(unittest.TestCase):
+    def make_build_definition(self, root: Path) -> str:
+        for relative in detect_updates.BUILD_DEFINITION_PATHS:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"definition: {relative}\n", encoding="utf-8", newline="\n")
+        return detect_updates.build_definition_sha256(root)
+
     def make_overlay(self, root: Path, version: str) -> Path:
         directory = root / "payload" / "ui" / version
         directory.mkdir(parents=True)
@@ -161,18 +168,53 @@ class BuilderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest = self.make_overlay(root, "0.1.178")
+            definition = self.make_build_definition(root)
             result = detect_updates.resolve_snapshot(root, FakeGitHubClient())
+            identity = detect_updates.release_identity_sha256(
+                result["overlay"], definition
+            )
             self.assertEqual(result["release_version"], "0.1.178-overdraft.1")
             self.assertEqual(
                 result["release_tag"],
-                f"fusion-v0.1.178-overdraft.1-eeeeeeee-ffffffff-u{detect_updates.sha256_file(manifest)[:8]}",
+                f"fusion-v0.1.178-overdraft.1-eeeeeeee-ffffffff-u{identity[:8]}",
             )
+            self.assertEqual(result["builder"]["definition_sha256"], definition)
             self.assertRegex(result["fingerprint"], r"^[0-9a-f]{64}$")
+
+    def test_builder_definition_change_generates_a_distinct_release_tag(self):
+        for relative in detect_updates.BUILD_DEFINITION_PATHS:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.make_overlay(root, "0.1.178")
+                self.make_build_definition(root)
+                first = detect_updates.resolve_snapshot(root, FakeGitHubClient())
+
+                (root / relative).write_text("definition: changed\n", encoding="utf-8")
+                second = detect_updates.resolve_snapshot(root, FakeGitHubClient())
+
+                self.assertNotEqual(first["builder"], second["builder"])
+                self.assertNotEqual(first["release_tag"], second["release_tag"])
+                self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+
+    def test_overlay_provenance_changes_release_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_overlay(root, "0.1.178")
+            definition = self.make_build_definition(root)
+            snapshot = detect_updates.resolve_snapshot(root, FakeGitHubClient())
+            replayed_overlay = dict(snapshot["overlay"])
+            replayed_overlay.update({"mode": "forward-replay", "source_version": "0.1.177"})
+
+            self.assertNotEqual(
+                detect_updates.release_identity_sha256(snapshot["overlay"], definition),
+                detect_updates.release_identity_sha256(replayed_overlay, definition),
+            )
 
     def test_snapshot_rejects_fork_based_on_newer_official(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.make_overlay(root, "0.1.178")
+            self.make_build_definition(root)
             with self.assertRaises(detect_updates.DetectionError):
                 detect_updates.resolve_snapshot(
                     root, FakeGitHubClient("0.1.179-overdraft.1")

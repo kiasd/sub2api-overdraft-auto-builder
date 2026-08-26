@@ -23,6 +23,18 @@ API_ROOT = "https://api.github.com"
 VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+)$")
 FORK_VERSION_RE = re.compile(r"^(\d+\.\d+\.\d+)-overdraft\.(\d+)$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+BUILD_DEFINITION_PATHS = (
+    ".gitattributes",
+    "manager.py",
+    "plugin.json",
+    "scripts/build_candidate.py",
+    "scripts/detect_updates.py",
+    "scripts/render_release_notes.py",
+    ".github/workflows/auto-build.yml",
+    "payload/migrationcheck/main.go",
+    "LICENSE",
+    "NOTICE",
+)
 
 
 class DetectionError(RuntimeError):
@@ -49,6 +61,39 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def build_definition_sha256(repository_root: Path) -> str:
+    """Hash the files that define a verified release's build and validation path."""
+    digest = hashlib.sha256()
+    for relative in BUILD_DEFINITION_PATHS:
+        path = repository_root / relative
+        if not path.is_file() or path.is_symlink():
+            raise DetectionError(f"build definition file is missing or unsafe: {relative}")
+        # GitHub Actions checks out these text files with LF. Normalize locally too
+        # so a Windows checkout cannot produce a different release identity.
+        content = path.read_bytes().replace(b"\r\n", b"\n")
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def release_identity_sha256(
+    overlay: dict[str, Any], builder_definition_sha256: str
+) -> str:
+    material = json.dumps(
+        {
+            "builder_definition_sha256": builder_definition_sha256,
+            # The selected source version and replay mode affect the candidate's
+            # provenance even when two overlay manifests contain identical bytes.
+            "overlay": overlay,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(material).hexdigest()
 
 
 class GitHubClient:
@@ -154,6 +199,7 @@ def resolve_snapshot(repository_root: Path, client: GitHubClient) -> dict[str, A
         raise DetectionError("Fork base version did not resolve to an official commit")
 
     overlay = resolve_overlay(repository_root / "payload" / "ui", official_version)
+    builder = {"definition_sha256": build_definition_sha256(repository_root)}
     inputs = {
         "official": {
             "repository": OFFICIAL_REPOSITORY,
@@ -173,6 +219,7 @@ def resolve_snapshot(repository_root: Path, client: GitHubClient) -> dict[str, A
             "url": f"https://github.com/{FORK_REPOSITORY}/commit/{fork_commit}",
         },
         "overlay": overlay,
+        "builder": builder,
     }
     canonical = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
     fingerprint = hashlib.sha256(canonical).hexdigest()
@@ -181,9 +228,13 @@ def resolve_snapshot(repository_root: Path, client: GitHubClient) -> dict[str, A
         if fork_base_version == official_version
         else f"{official_version}-overdraft.{fork_match.group(2)}"
     )
+    release_identity = release_identity_sha256(
+        overlay,
+        builder["definition_sha256"],
+    )
     release_tag = (
         f"fusion-v{release_version}-{official_commit[:8]}-"
-        f"{fork_commit[:8]}-u{str(overlay.get('manifest_sha256', 'missing'))[:8]}"
+        f"{fork_commit[:8]}-u{release_identity[:8]}"
     )
     return {
         "schema": 1,
