@@ -1,6 +1,6 @@
 {
   "last_success": {
-    "fingerprint": "3bff3befe94a7ee0f46ccad37e5782e31aea86eaa2751c9af901242cce70dc35",
+    "fingerprint": "522dc357b36b1312d65e6432d1e7a691709338b3a31a5cab07f17678af12688a",
     "fork": {
       "base_commit": "5a7d469622911a6b1291a692376df5fa03f9ac2e",
       "base_version": "0.1.182",
@@ -11,24 +11,24 @@
       "version": "0.1.182-overdraft.5"
     },
     "official": {
-      "commit": "5a7d469622911a6b1291a692376df5fa03f9ac2e",
-      "published_at": "2026-08-25T04:47:32Z",
+      "commit": "e8cb019fabf8b55199436229044cbf9aa7a82564",
+      "published_at": "2026-08-25T13:53:00Z",
       "repository": "Wei-Shaw/sub2api",
-      "tag": "v0.1.182",
-      "url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.182",
-      "version": "0.1.182"
+      "tag": "v0.1.183",
+      "url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.183",
+      "version": "0.1.183"
     },
     "overlay": {
       "available": true,
       "manifest_sha256": "7a6339bb75c57ff0e9ee32f275dba91dfd3c00be786b990b491302953e353019",
-      "mode": "exact",
+      "mode": "forward-replay",
       "source_version": "0.1.182",
-      "target_version": "0.1.182"
+      "target_version": "0.1.183"
     },
-    "published_at": "2026-08-25T09:42:36+00:00",
-    "release_tag": "fusion-v0.1.182-overdraft.5-5a7d4696-a6e376a2-u7a6339bb",
-    "release_version": "0.1.182-overdraft.5",
-    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/32832669842"
+    "published_at": "2026-08-26T05:45:26+00:00",
+    "release_tag": "fusion-v0.1.183-overdraft.5-e8cb019f-a6e376a2-u7a6339bb",
+    "release_version": "0.1.183-overdraft.5",
+    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/32934782524"
   },
   "schema": 1
 }
