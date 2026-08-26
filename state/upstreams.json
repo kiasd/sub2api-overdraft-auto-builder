@@ -1,6 +1,6 @@
 {
   "last_success": {
-    "fingerprint": "522dc357b36b1312d65e6432d1e7a691709338b3a31a5cab07f17678af12688a",
+    "fingerprint": "49da15bac9837d2a2e321b7573688af9c015aa95e0c98519255a01a9c57ffdad",
     "fork": {
       "base_commit": "5a7d469622911a6b1291a692376df5fa03f9ac2e",
       "base_version": "0.1.182",
@@ -25,10 +25,10 @@
       "source_version": "0.1.182",
       "target_version": "0.1.183"
     },
-    "published_at": "2026-08-26T05:59:25+00:00",
-    "release_tag": "fusion-v0.1.183-overdraft.5-e8cb019f-a6e376a2-u7a6339bb",
+    "published_at": "2026-08-26T06:29:20+00:00",
+    "release_tag": "fusion-v0.1.183-overdraft.5-e8cb019f-a6e376a2-u9ec40f78",
     "release_version": "0.1.183-overdraft.5",
-    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/32935797274"
+    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/32937945441"
   },
   "schema": 1
 }
