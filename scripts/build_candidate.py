@@ -24,6 +24,9 @@ import manager  # noqa: E402
 
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+FORK_REPLAY_EXCLUDED_PATHS = (
+    "backend/cmd/server/VERSION",
+)
 TEXT_SOURCE_SUFFIXES = {
     ".css",
     ".html",
@@ -187,6 +190,13 @@ def clone_at(repository: str, commit: str, destination: Path) -> Path:
     return destination
 
 
+def fork_feature_diff_command(base_commit: str, fork_commit: str) -> list[str]:
+    """Build the replay diff without carrying the upstream version marker."""
+    command = ["git", "diff", "--binary", base_commit, fork_commit, "--", "."]
+    command.extend(f":(exclude){path}" for path in FORK_REPLAY_EXCLUDED_PATHS)
+    return command
+
+
 def prepare_aligned_fork(work: Path, detection: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     fork = detection["fork"]
     archive = work / "fork-source.tar.gz"
@@ -225,7 +235,7 @@ def prepare_replayed_fork(work: Path, detection: dict[str, Any]) -> tuple[Path, 
     run(["git", "fetch", "--filter=blob:none", "official-upstream", str(fork["base_commit"])], cwd=fork_source)
     patch_path = work / "fork-feature.patch"
     patch_text = run(
-        ["git", "diff", "--binary", str(fork["base_commit"]), str(fork["commit"])],
+        fork_feature_diff_command(str(fork["base_commit"]), str(fork["commit"])),
         cwd=fork_source,
         capture=True,
     )
@@ -241,6 +251,7 @@ def prepare_replayed_fork(work: Path, detection: dict[str, Any]) -> tuple[Path, 
         "official_source_tree": source_tree,
         "fork_diff_sha256": manager.sha256_file(patch_path),
         "fork_base_commit": str(fork["base_commit"]),
+        "fork_replay_excluded_paths": list(FORK_REPLAY_EXCLUDED_PATHS),
     }
 
 
