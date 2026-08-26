@@ -130,10 +130,24 @@ class BuilderTests(unittest.TestCase):
                 with self.assertRaises(build_candidate.BuildError):
                     build_candidate.safe_relative_path(value)
 
-    def test_replay_diff_excludes_embedded_version_marker(self):
-        command = build_candidate.fork_feature_diff_command("a" * 40, "b" * 40)
-        self.assertEqual(command[:6], ["git", "diff", "--binary", "a" * 40, "b" * 40, "--"])
-        self.assertEqual(command[6:], [".", ":(exclude)backend/cmd/server/VERSION"])
+    def test_replay_base_is_fetched_from_the_full_shallow_clone(self):
+        commands: list[list[str]] = []
+
+        def fake_run(command, **_kwargs):
+            commands.append(list(command))
+            return None
+
+        original_run = build_candidate.run
+        build_candidate.run = fake_run
+        try:
+            build_candidate.fetch_replay_base(Path("/tmp/source"), "a" * 40)
+        finally:
+            build_candidate.run = original_run
+
+        self.assertEqual(
+            commands,
+            [["git", "fetch", "--depth=1", "origin", "a" * 40]],
+        )
 
     def test_fingerprint_state_controls_builds(self):
         snapshot = {"fingerprint": "a" * 64}

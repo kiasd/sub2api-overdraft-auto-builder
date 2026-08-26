@@ -114,6 +114,36 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(result["version"], "0.1.178")
         self.assertEqual(result["commit"], "e" * 40)
 
+    def test_full_shallow_clone_keeps_replay_base_blobs_available(self):
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(list(command))
+            if command[:2] == ["git", "rev-parse"]:
+                return mock.Mock(stdout="a" * 40 + "\n")
+            return mock.Mock(stdout="")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch.object(manager, "run", side_effect=fake_run):
+                source, source_hash = manager.clone_official_source(
+                    "0.1.183", "b" * 40, Path(temporary), partial=False
+                )
+
+        self.assertEqual(source, Path(temporary) / "official-source")
+        self.assertEqual(source_hash, "a" * 40)
+        self.assertEqual(
+            calls[0],
+            [
+                "git",
+                "clone",
+                "--depth=1",
+                "--no-checkout",
+                f"https://github.com/{manager.OFFICIAL_REPO}.git",
+                Path(temporary) / "official-source",
+            ],
+        )
+        self.assertNotIn("--filter=blob:none", calls[0])
+
     def test_patch_selection_uses_exact_official_baseline(self):
         base_version, patch_path, base_commit = manager.select_overdraft_patch("0.1.178")
         self.assertEqual(base_version, "0.1.178")

@@ -910,17 +910,25 @@ def build_environment() -> dict[str, str]:
     return environment
 
 
-def clone_official_source(version: str, commit: str, work: Path) -> tuple[Path, str]:
+def clone_official_source(
+    version: str, commit: str, work: Path, *, partial: bool = True
+) -> tuple[Path, str]:
     source = work / "official-source"
-    try:
+    if partial:
+        try:
+            run(
+                ["git", "clone", "--filter=blob:none", "--no-checkout", f"https://github.com/{OFFICIAL_REPO}.git", source],
+                timeout=1800,
+            )
+        except ManagerError:
+            shutil.rmtree(source, ignore_errors=True)
+            run(
+                ["git", "clone", "--no-checkout", f"https://github.com/{OFFICIAL_REPO}.git", source],
+                timeout=1800,
+            )
+    else:
         run(
-            ["git", "clone", "--filter=blob:none", "--no-checkout", f"https://github.com/{OFFICIAL_REPO}.git", source],
-            timeout=1800,
-        )
-    except ManagerError:
-        shutil.rmtree(source, ignore_errors=True)
-        run(
-            ["git", "clone", "--no-checkout", f"https://github.com/{OFFICIAL_REPO}.git", source],
+            ["git", "clone", "--depth=1", "--no-checkout", f"https://github.com/{OFFICIAL_REPO}.git", source],
             timeout=1800,
         )
     run(["git", "fetch", "--depth=1", "origin", commit], cwd=source, timeout=1800)
