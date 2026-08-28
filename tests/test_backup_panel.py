@@ -157,6 +157,51 @@ class BackupPanelTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=5)
 
+    def test_ip_refresh_request_runs_an_immediate_server_side_check(self):
+        server = panel.ThreadingHTTPServer(("127.0.0.1", 0), panel.BackupHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            credentials = base64.b64encode(
+                f"{panel.WEB_USER}:{panel.WEB_PASSWORD}".encode("utf-8")
+            ).decode("ascii")
+            body = urllib.parse.urlencode({"csrf_token": panel.CSRF_TOKEN}).encode("ascii")
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/api/ip-refresh",
+                data=body,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Basic {credentials}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            status = {
+                "ip": "192.0.2.7",
+                "country": "US",
+                "region": "California",
+                "city": "Los Angeles",
+                "org": "Test Network",
+                "timezone": "America/Los_Angeles",
+                "is_us": True,
+                "previous_ip": "",
+                "ip_changed": False,
+                "checked_at": "2026-08-28 12:00:00",
+                "error": "",
+            }
+            with mock.patch.object(panel, "check_public_ip", return_value=status) as check, \
+                urllib.request.urlopen(request, timeout=5) as response:
+                payload = json.load(response)
+
+            self.assertEqual(response.status, 200)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["ip"], "192.0.2.7")
+            self.assertEqual(payload["message"], "出口 IP 已刷新。")
+            check.assert_called_once_with()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
     def test_json_apply_errors_never_return_an_html_error_page(self):
         server = panel.ThreadingHTTPServer(("127.0.0.1", 0), panel.BackupHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -295,6 +340,9 @@ class BackupPanelTests(unittest.TestCase):
         self.assertIn(f'name="expected_tag" value="{tag}"', page)
         self.assertIn(f'name="expected_sha256" value="{digest}"', page)
         self.assertIn('id="pluginApplyButton" class="plugin-button primary" type="submit">重新应用已验证版本</button>', page)
+        self.assertIn('id="ipRefreshButton"', page)
+        self.assertIn("fetch('/api/ip-refresh'", page)
+        self.assertIn("正在从服务器出口检测 IP", page)
         self.assertNotIn('id="pluginApplyForm" method="post" action="/plugin" onsubmit=', page)
         node = shutil.which("node")
         if node:

@@ -36,6 +36,7 @@ PLUGIN_CONTROL = Path(os.environ.get("SUB2API_PLUGIN_CONTROL", "/usr/local/sbin/
 BACKUP_NAME = re.compile(r"^sub2api-\d{8}-\d{6}\.dump$")
 EMAIL_ADDRESS = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 IP_STATUS_LOCK = threading.Lock()
+IP_CHECK_LOCK = threading.RLock()
 EMAIL_STATUS_LOCK = threading.Lock()
 EMAIL_CONFIG_LOCK = threading.Lock()
 EMAIL_SEND_LOCK = threading.Lock()
@@ -217,35 +218,37 @@ def backup_rows():
 
 
 def check_public_ip():
-    checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        request = urllib.request.Request(IP_INFO_URL, headers={"User-Agent": "Sub2API-Backup-Monitor/1.0"})
-        with urllib.request.urlopen(request, timeout=12) as response:
-            payload = json.load(response)
-        country = str(payload.get("country", "")).upper()
-        previous_ip = str(MONITOR_STATE.get("last_ip", ""))
-        current_ip = str(payload.get("ip", ""))
-        status = {
-            "ip": current_ip,
-            "country": country,
-            "region": str(payload.get("region", "")),
-            "city": str(payload.get("city", "")),
-            "org": str(payload.get("org", "")),
-            "timezone": str(payload.get("timezone", "")),
-            "is_us": country == "US" if country else None,
-            "previous_ip": previous_ip,
-            "ip_changed": bool(previous_ip and current_ip and previous_ip != current_ip),
-            "checked_at": checked_at,
-            "error": "",
-        }
-        save_monitor_state({"last_ip": current_ip})
-    except Exception as exc:
+    with IP_CHECK_LOCK:
+        checked_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            request = urllib.request.Request(IP_INFO_URL, headers={"User-Agent": "Sub2API-Backup-Monitor/1.0"})
+            with urllib.request.urlopen(request, timeout=12) as response:
+                payload = json.load(response)
+            country = str(payload.get("country", "")).upper()
+            previous_ip = str(MONITOR_STATE.get("last_ip", ""))
+            current_ip = str(payload.get("ip", ""))
+            status = {
+                "ip": current_ip,
+                "country": country,
+                "region": str(payload.get("region", "")),
+                "city": str(payload.get("city", "")),
+                "org": str(payload.get("org", "")),
+                "timezone": str(payload.get("timezone", "")),
+                "is_us": country == "US" if country else None,
+                "previous_ip": previous_ip,
+                "ip_changed": bool(previous_ip and current_ip and previous_ip != current_ip),
+                "checked_at": checked_at,
+                "error": "",
+            }
+            save_monitor_state({"last_ip": current_ip})
+        except Exception as exc:
+            with IP_STATUS_LOCK:
+                status = dict(IP_STATUS)
+            status["checked_at"] = checked_at
+            status["error"] = str(exc)[:160]
         with IP_STATUS_LOCK:
-            status = dict(IP_STATUS)
-        status["checked_at"] = checked_at
-        status["error"] = str(exc)[:160]
-    with IP_STATUS_LOCK:
-        IP_STATUS.update(status)
+            IP_STATUS.update(status)
+            return dict(IP_STATUS)
 
 
 def public_ip_loop():
@@ -693,6 +696,9 @@ class BackupHandler(BaseHTTPRequestHandler):
         if not self.authorized():
             self.require_auth()
             return
+        if route == "/api/ip-refresh":
+            self.refresh_public_ip_request()
+            return
         if route == "/email-config":
             self.save_email_config_request()
             return
@@ -1017,6 +1023,40 @@ class BackupHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def refresh_public_ip_request(self):
+        if self.csrf_form(maximum=1024) is None:
+            return
+        if not IP_CHECK_LOCK.acquire(blocking=False):
+            self.render_ip_refresh_result(
+                409,
+                {"ok": False, "message": "出口 IP 检测正在进行，请稍后重试。"},
+            )
+            return
+        try:
+            status = check_public_ip()
+        finally:
+            IP_CHECK_LOCK.release()
+        if status.get("error"):
+            status.update(
+                {
+                    "ok": False,
+                    "message": f"出口 IP 检测失败：{status['error']}",
+                }
+            )
+            self.render_ip_refresh_result(502, status)
+            return
+        status.update({"ok": True, "message": "出口 IP 已刷新。"})
+        self.render_ip_refresh_result(200, status)
+
+    def render_ip_refresh_result(self, code, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_common_headers()
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def render_server_status(self):
         body = json.dumps(collect_server_status(), ensure_ascii=False).encode("utf-8")
         self.send_response(200)
@@ -1239,10 +1279,16 @@ class BackupHandler(BaseHTTPRequestHandler):
     .network-ip {{ font-size:20px; }}
     .network-location {{ color:#475467; }}
     .network-meta {{ grid-column:1 / -1; color:var(--muted); font-size:12px; display:flex; gap:18px; flex-wrap:wrap; }}
+    .network-actions {{ display:flex; align-items:center; gap:8px; justify-self:end; }}
     .country-badge {{ justify-self:end; padding:7px 10px; border-radius:5px; font-weight:700; white-space:nowrap; border:1px solid; }}
     .country-badge.is-us {{ color:#166534; background:#dcfce7; border-color:#86efac; }}
     .country-badge.not-us {{ color:#991b1b; background:#fee2e2; border-color:#fca5a5; }}
     .country-badge.unknown {{ color:#475467; background:#f2f4f7; border-color:#d0d5dd; }}
+    .ip-refresh {{ border:1px solid #86efac; border-radius:5px; padding:7px 10px; background:#f0fdf4; color:#166534; font:inherit; font-weight:700; cursor:pointer; white-space:nowrap; }}
+    .ip-refresh:hover:not(:disabled) {{ background:#dcfce7; }}
+    .ip-refresh:disabled {{ color:#98a2b3; background:#f2f4f7; border-color:#d0d5dd; cursor:wait; }}
+    .ip-refresh-feedback {{ color:var(--muted); }}
+    .ip-refresh-feedback.error {{ color:#b42318; }}
     .metrics {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:20px; }}
     .server-panel {{ background:var(--surface); border:1px solid var(--line); border-radius:6px; margin-bottom:12px; overflow:hidden; }}
     .server-header {{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 18px; border-bottom:1px solid #e7ebf0; }}
@@ -1335,7 +1381,7 @@ class BackupHandler(BaseHTTPRequestHandler):
     .empty {{ text-align:center; color:var(--muted); padding:36px; }}
     footer {{ margin-top:14px; color:var(--muted); font-size:12px; }}
     @media (max-width:900px) {{ .server-metrics, .service-list {{ grid-template-columns:repeat(3,minmax(0,1fr)); }} .server-metric:nth-child(3) {{ border-right:0; }} .form-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} }}
-    @media (max-width:760px) {{ .metrics, .server-metrics, .service-list {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .server-header, .header-inner {{ align-items:flex-start; padding:18px 0; flex-direction:column; }} .server-header {{ padding:16px; }} .server-metric:nth-child(3) {{ border-right:1px solid #e7ebf0; }} .server-metric:nth-child(even) {{ border-right:0; }} .network {{ grid-template-columns:1fr; }} .country-badge {{ justify-self:start; }} .mail-header {{ flex-direction:column; }} .form-grid {{ grid-template-columns:1fr; }} .channel-row {{ grid-template-columns:1fr auto; }} }}
+    @media (max-width:760px) {{ .metrics, .server-metrics, .service-list {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .server-header, .header-inner {{ align-items:flex-start; padding:18px 0; flex-direction:column; }} .server-header {{ padding:16px; }} .server-metric:nth-child(3) {{ border-right:1px solid #e7ebf0; }} .server-metric:nth-child(even) {{ border-right:0; }} .network {{ grid-template-columns:1fr; }} .network-actions {{ justify-self:start; flex-wrap:wrap; }} .country-badge {{ justify-self:start; }} .mail-header {{ flex-direction:column; }} .form-grid {{ grid-template-columns:1fr; }} .channel-row {{ grid-template-columns:1fr auto; }} }}
     @media (max-width:480px) {{ .server-metrics, .service-list {{ grid-template-columns:1fr; }} .server-metric {{ border-right:0; border-bottom:1px solid #e7ebf0; }} .server-metric:last-child {{ border-bottom:0; }} }}
   </style>
 </head>
@@ -1347,8 +1393,8 @@ class BackupHandler(BaseHTTPRequestHandler):
     {plugin_notice}
     <section class="network" aria-label="公网出口状态">
       <div class="network-main"><span class="network-label">公网出口</span><strong class="network-ip" id="publicIp">{html.escape(ip_address)}</strong><span class="network-location" id="ipLocation">{html.escape(ip_location)}</span></div>
-      <span class="country-badge {ip_badge_class}" id="countryBadge">{ip_badge}</span>
-      <div class="network-meta"><span id="ipOrg">{html.escape(ip_org)}</span><span id="ipCheckedAt">最后检测：{html.escape(ip_checked_at)}</span><span>每 30 分钟检测</span></div>
+      <div class="network-actions"><span class="country-badge {ip_badge_class}" id="countryBadge">{ip_badge}</span><button class="ip-refresh" id="ipRefreshButton" type="button" title="立即从服务器出口重新检测公网 IP">&#8635; 刷新检测</button></div>
+      <div class="network-meta"><span id="ipOrg">{html.escape(ip_org)}</span><span id="ipCheckedAt">最后检测：{html.escape(ip_checked_at)}</span><span>每 30 分钟检测</span><span class="ip-refresh-feedback" id="ipRefreshFeedback" role="status" aria-live="polite" hidden></span></div>
     </section>
     <section class="server-panel" aria-label="服务器状态">
       <div class="server-header">
@@ -1432,6 +1478,46 @@ class BackupHandler(BaseHTTPRequestHandler):
         if (response.ok) updateIpStatus(await response.json());
       }} catch (_) {{}}
     }}
+    let ipRefreshRunning = false;
+    const ipRefreshButton = document.getElementById('ipRefreshButton');
+    const ipRefreshFeedback = document.getElementById('ipRefreshFeedback');
+    function setIpRefreshFeedback(message, failed = false) {{
+      ipRefreshFeedback.textContent = message;
+      ipRefreshFeedback.hidden = !message;
+      ipRefreshFeedback.classList.toggle('error', failed);
+    }}
+    async function refreshPublicIp() {{
+      if (ipRefreshRunning) return;
+      ipRefreshRunning = true;
+      ipRefreshButton.disabled = true;
+      ipRefreshButton.textContent = '检测中';
+      setIpRefreshFeedback('正在从服务器出口检测 IP...');
+      try {{
+        const response = await fetch('/api/ip-refresh', {{
+          method: 'POST',
+          headers: {{ Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' }},
+          body: new URLSearchParams({{ csrf_token: {json.dumps(CSRF_TOKEN)} }}),
+          cache: 'no-store',
+        }});
+        const responseType = response.headers.get('content-type') || '';
+        if (!responseType.includes('application/json')) {{
+          throw new Error('出口 IP 检测请求失败（HTTP ' + response.status + '）');
+        }}
+        const result = await response.json();
+        updateIpStatus(result);
+        if (!response.ok || result.ok !== true) {{
+          throw new Error(result.message || '出口 IP 检测失败');
+        }}
+        setIpRefreshFeedback(result.message || '出口 IP 已刷新。');
+      }} catch (error) {{
+        setIpRefreshFeedback(error instanceof Error ? error.message : '出口 IP 检测失败', true);
+      }} finally {{
+        ipRefreshRunning = false;
+        ipRefreshButton.disabled = false;
+        ipRefreshButton.textContent = '\\u21bb 刷新检测';
+      }}
+    }}
+    ipRefreshButton.addEventListener('click', refreshPublicIp);
     function humanSize(value) {{
       if (!Number.isFinite(value)) return '未知';
       const units = ['B', 'KB', 'MB', 'GB', 'TB'];
