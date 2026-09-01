@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import manager  # noqa: E402
+from scripts import detect_updates  # noqa: E402
 
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -195,6 +196,96 @@ def fetch_replay_base(source: Path, base_commit: str) -> None:
     )
 
 
+def approved_replay_from_detection(detection: dict[str, Any]) -> dict[str, Any] | None:
+    """Re-validate the exact local replay selected by immutable detection."""
+    replay = detection.get("replay")
+    if not isinstance(replay, dict):
+        return None
+    if replay.get("mode") != "approved-resolved-patch":
+        return None
+    expected_manifest_sha256 = str(replay.get("manifest_sha256", "")).lower()
+    expected_entry_sha256 = str(replay.get("entry_sha256", "")).lower()
+    replay_id = replay.get("id")
+    if (
+        not isinstance(replay_id, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_manifest_sha256)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_entry_sha256)
+    ):
+        raise BuildError("approved replay metadata is malformed")
+    try:
+        manifest_sha256, entries = detect_updates.load_approved_replays(ROOT)
+    except detect_updates.DetectionError as exc:
+        raise BuildError(f"approved replay manifest validation failed: {exc}") from exc
+    if manifest_sha256 != expected_manifest_sha256:
+        raise BuildError("approved replay manifest changed after detection")
+    matches = [entry for entry in entries if entry["id"] == replay_id]
+    if len(matches) != 1:
+        raise BuildError("approved replay entry is missing or duplicated")
+    entry = matches[0]
+    if detect_updates.canonical_json_sha256(entry) != expected_entry_sha256:
+        raise BuildError("approved replay entry changed after detection")
+
+    official = detection.get("official")
+    fork = detection.get("fork")
+    if not isinstance(official, dict) or not isinstance(fork, dict):
+        raise BuildError("approved replay detection is missing upstream provenance")
+    target_matches = entry["target"] == {
+        "repository": str(official.get("repository", "")),
+        "version": str(official.get("version", "")),
+        "commit": str(official.get("commit", "")).lower(),
+    }
+    source_matches = (
+        entry["source"]["repository"] == str(fork.get("repository", ""))
+        and entry["source"]["branch"] == str(fork.get("branch", ""))
+        and entry["source"]["version"] == str(fork.get("version", ""))
+        and entry["source"]["commit"] == str(fork.get("commit", "")).lower()
+        and entry["source"]["base_version"] == str(fork.get("base_version", ""))
+        and entry["source"]["base_commit"] == str(fork.get("base_commit", "")).lower()
+    )
+    replay_matches = (
+        replay.get("target") == entry["target"]
+        and replay.get("source") == entry["source"]
+        and replay.get("patch") == entry["patch"]
+        and replay.get("overdraft_revision") == entry["overdraft_revision"]
+    )
+    if not target_matches or not source_matches or not replay_matches:
+        raise BuildError("approved replay no longer matches the immutable detection inputs")
+    return entry
+
+
+def prepare_approved_replay(work: Path, detection: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+    official = detection["official"]
+    replay = approved_replay_from_detection(detection)
+    if replay is None:
+        raise BuildError("no approved replay is available for this custom Fork source")
+    if str(official.get("repository", "")) != manager.OFFICIAL_REPO:
+        raise BuildError("approved replay official repository does not match the build source")
+    source, source_tree = manager.clone_official_source(
+        str(official["version"]),
+        str(official["commit"]),
+        work,
+        partial=False,
+    )
+    patch_path = ROOT / str(replay["patch"]["path"])
+    run(["git", "apply", "--check", "--whitespace=error", patch_path], cwd=source)
+    run(["git", "apply", "--whitespace=error", patch_path], cwd=source)
+    unresolved = run(
+        ["git", "diff", "--name-only", "--diff-filter=U"], cwd=source, capture=True
+    ).strip()
+    if unresolved:
+        raise BuildError(f"approved replay left unresolved files:\n{unresolved}")
+    return source, {
+        "integration_mode": "official-plus-approved-resolved-replay",
+        "official_source_tree": source_tree,
+        "fork_diff_sha256": str(replay["source"]["feature_diff_sha256"]),
+        "fork_base_commit": str(replay["source"]["base_commit"]),
+        "fork_replay_patch": str(replay["patch"]["path"]),
+        "fork_replay_patch_sha256": str(replay["patch"]["sha256"]),
+        "fork_replay_id": str(replay["id"]),
+        "fork_replay_source_mode": "approved-resolved-patch",
+    }
+
+
 def prepare_aligned_fork(work: Path, detection: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     fork = detection["fork"]
     archive = work / "fork-source.tar.gz"
@@ -259,7 +350,12 @@ def prepare_replayed_fork(work: Path, detection: dict[str, Any]) -> tuple[Path, 
 def prepare_source(work: Path, detection: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
     official_version = str(detection["official"]["version"])
     fork_base_version = str(detection["fork"]["base_version"])
-    if fork_base_version == official_version:
+    approved_replay = approved_replay_from_detection(detection)
+    if approved_replay is not None:
+        source, provenance = prepare_approved_replay(work, detection)
+    elif str(detection["fork"].get("flavor", "")) == "custom":
+        raise BuildError("custom Fork sources require an approved resolved replay")
+    elif fork_base_version == official_version:
         source, provenance = prepare_aligned_fork(work, detection)
     else:
         source, provenance = prepare_replayed_fork(work, detection)

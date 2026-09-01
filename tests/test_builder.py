@@ -8,13 +8,25 @@ from scripts import build_candidate, detect_updates
 
 
 class FakeGitHubClient:
-    def __init__(self, fork_version: str = "0.1.178-overdraft.1") -> None:
+    def __init__(
+        self,
+        fork_version: str = "0.1.178-overdraft.1",
+        *,
+        official_version: str = "0.1.178",
+        official_commit: str = "e" * 40,
+        fork_commit: str = "f" * 40,
+        base_commits: dict[str, str] | None = None,
+    ) -> None:
         self.fork_version = fork_version
+        self.official_version = official_version
+        self.official_commit = official_commit
+        self.fork_commit = fork_commit
+        self.base_commits = base_commits or {}
 
     def get(self, path: str):
         if path.endswith("/releases/latest"):
             return {
-                "tag_name": "v0.1.178",
+                "tag_name": f"v{self.official_version}",
                 "published_at": "2026-08-18T00:00:00Z",
                 "html_url": "https://example.invalid/official-release",
             }
@@ -23,10 +35,13 @@ class FakeGitHubClient:
                 "encoding": "base64",
                 "content": base64.b64encode(self.fork_version.encode()).decode(),
             }
-        if path.endswith("/commits/v0.1.178"):
-            return {"sha": "e" * 40}
-        if path.endswith("/commits/codex-overdraft"):
-            return {"sha": "f" * 40}
+        if path.endswith(f"/commits/{detect_updates.FORK_BRANCH}"):
+            return {"sha": self.fork_commit}
+        for version, commit in self.base_commits.items():
+            if path.endswith(f"/commits/v{version}"):
+                return {"sha": commit}
+        if path.endswith(f"/commits/v{self.official_version}"):
+            return {"sha": self.official_commit}
         raise AssertionError(f"unexpected API path: {path}")
 
 
@@ -35,7 +50,8 @@ class BuilderTests(unittest.TestCase):
         for relative in detect_updates.BUILD_DEFINITION_PATHS:
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"definition: {relative}\n", encoding="utf-8", newline="\n")
+            if not path.exists():
+                path.write_text(f"definition: {relative}\n", encoding="utf-8", newline="\n")
         return detect_updates.build_definition_sha256(root)
 
     def make_overlay(self, root: Path, version: str) -> Path:
@@ -47,6 +63,49 @@ class BuilderTests(unittest.TestCase):
             encoding="utf-8",
         )
         return manifest
+
+    def make_custom_replay(
+        self,
+        root: Path,
+        *,
+        target_version: str = "0.1.185",
+        target_commit: str = "a" * 40,
+        source_commit: str = "b" * 40,
+        base_commit: str = "c" * 40,
+        revision: int = 1,
+    ) -> dict:
+        patch = root / "payload" / "fork-replays" / "resolved.patch"
+        patch.parent.mkdir(parents=True, exist_ok=True)
+        patch.write_text("diff --git a/a b/a\n", encoding="utf-8", newline="\n")
+        entry = {
+            "id": "custom-test-replay",
+            "target": {
+                "repository": detect_updates.OFFICIAL_REPOSITORY,
+                "version": target_version,
+                "commit": target_commit,
+            },
+            "source": {
+                "repository": detect_updates.FORK_REPOSITORY,
+                "branch": detect_updates.FORK_BRANCH,
+                "version": "0.1.184-custom.1",
+                "commit": source_commit,
+                "base_version": "0.1.183",
+                "base_commit": base_commit,
+                "feature_diff_sha256": "d" * 64,
+            },
+            "patch": {
+                "path": "payload/fork-replays/resolved.patch",
+                "sha256": detect_updates.sha256_file(patch),
+            },
+            "overdraft_revision": revision,
+        }
+        manifest = patch.parent / "manifest.json"
+        manifest.write_text(
+            json.dumps({"schema": 1, "replays": [entry]}),
+            encoding="utf-8",
+            newline="\n",
+        )
+        return entry
 
     def test_overlay_selection_prefers_exact_then_forwards_latest_older(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -171,7 +230,7 @@ class BuilderTests(unittest.TestCase):
             definition = self.make_build_definition(root)
             result = detect_updates.resolve_snapshot(root, FakeGitHubClient())
             identity = detect_updates.release_identity_sha256(
-                result["overlay"], definition
+                result, definition
             )
             self.assertEqual(result["release_version"], "0.1.178-overdraft.1")
             self.assertEqual(
@@ -202,12 +261,14 @@ class BuilderTests(unittest.TestCase):
             self.make_overlay(root, "0.1.178")
             definition = self.make_build_definition(root)
             snapshot = detect_updates.resolve_snapshot(root, FakeGitHubClient())
+            replayed_inputs = dict(snapshot)
             replayed_overlay = dict(snapshot["overlay"])
             replayed_overlay.update({"mode": "forward-replay", "source_version": "0.1.177"})
+            replayed_inputs["overlay"] = replayed_overlay
 
             self.assertNotEqual(
-                detect_updates.release_identity_sha256(snapshot["overlay"], definition),
-                detect_updates.release_identity_sha256(replayed_overlay, definition),
+                detect_updates.release_identity_sha256(snapshot, definition),
+                detect_updates.release_identity_sha256(replayed_inputs, definition),
             )
 
     def test_snapshot_rejects_fork_based_on_newer_official(self):
@@ -219,6 +280,208 @@ class BuilderTests(unittest.TestCase):
                 detect_updates.resolve_snapshot(
                     root, FakeGitHubClient("0.1.179-overdraft.1")
                 )
+
+    def test_approved_custom_replay_uses_the_official_target_version(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_overlay(root, "0.1.185")
+            entry = self.make_custom_replay(root)
+            definition = self.make_build_definition(root)
+            snapshot = detect_updates.resolve_snapshot(
+                root,
+                FakeGitHubClient(
+                    "0.1.184-custom.1",
+                    official_version="0.1.185",
+                    official_commit=entry["target"]["commit"],
+                    fork_commit=entry["source"]["commit"],
+                    base_commits={"0.1.183": entry["source"]["base_commit"]},
+                ),
+            )
+
+            self.assertEqual(snapshot["release_version"], "0.1.185-overdraft.1")
+            self.assertEqual(snapshot["fork"]["base_version"], "0.1.183")
+            self.assertEqual(snapshot["replay"]["mode"], "approved-resolved-patch")
+            self.assertEqual(snapshot["replay"]["id"], entry["id"])
+            self.assertEqual(
+                snapshot["replay"]["entry_sha256"],
+                detect_updates.canonical_json_sha256(entry),
+            )
+            self.assertNotEqual(
+                snapshot["release_tag"],
+                f"fusion-v0.1.185-overdraft.1-aaaaaaaa-bbbbbbbb-u{definition[:8]}",
+            )
+
+    def test_custom_replay_without_an_exact_approval_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_overlay(root, "0.1.185")
+            replay_manifest = root / "payload" / "fork-replays" / "manifest.json"
+            replay_manifest.parent.mkdir(parents=True, exist_ok=True)
+            replay_manifest.write_text('{"schema": 1, "replays": []}', encoding="utf-8")
+            self.make_build_definition(root)
+            with self.assertRaisesRegex(
+                detect_updates.DetectionError, "approved resolved replay"
+            ):
+                detect_updates.resolve_snapshot(
+                    root,
+                    FakeGitHubClient(
+                        "0.1.184-custom.1",
+                        official_version="0.1.185",
+                        official_commit="a" * 40,
+                        fork_commit="b" * 40,
+                        base_commits={"0.1.183": "c" * 40},
+                    ),
+                )
+
+    def test_custom_replay_rejects_a_changed_patch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_overlay(root, "0.1.185")
+            entry = self.make_custom_replay(root)
+            self.make_build_definition(root)
+            (root / "payload" / "fork-replays" / "resolved.patch").write_text(
+                "changed", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(detect_updates.DetectionError, "checksum"):
+                detect_updates.resolve_snapshot(
+                    root,
+                    FakeGitHubClient(
+                        "0.1.184-custom.1",
+                        official_version="0.1.185",
+                        official_commit=entry["target"]["commit"],
+                        fork_commit=entry["source"]["commit"],
+                        base_commits={"0.1.183": entry["source"]["base_commit"]},
+                    ),
+                )
+
+    def test_custom_replay_requires_the_exact_official_commit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_overlay(root, "0.1.185")
+            entry = self.make_custom_replay(root, target_commit="a" * 40)
+            self.make_build_definition(root)
+            with self.assertRaisesRegex(
+                detect_updates.DetectionError, "approved resolved replay"
+            ):
+                detect_updates.resolve_snapshot(
+                    root,
+                    FakeGitHubClient(
+                        "0.1.184-custom.1",
+                        official_version="0.1.185",
+                        official_commit="e" * 40,
+                        fork_commit=entry["source"]["commit"],
+                        base_commits={"0.1.183": entry["source"]["base_commit"]},
+                    ),
+                )
+
+    def test_custom_replay_rejects_a_retagged_base_commit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_overlay(root, "0.1.185")
+            entry = self.make_custom_replay(root)
+            self.make_build_definition(root)
+            with self.assertRaisesRegex(detect_updates.DetectionError, "base tag"):
+                detect_updates.resolve_snapshot(
+                    root,
+                    FakeGitHubClient(
+                        "0.1.184-custom.1",
+                        official_version="0.1.185",
+                        official_commit=entry["target"]["commit"],
+                        fork_commit=entry["source"]["commit"],
+                        base_commits={"0.1.183": "e" * 40},
+                    ),
+                )
+
+    def test_replay_manifest_change_generates_a_distinct_release_tag(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_overlay(root, "0.1.185")
+            entry = self.make_custom_replay(root)
+            self.make_build_definition(root)
+            client = FakeGitHubClient(
+                "0.1.184-custom.1",
+                official_version="0.1.185",
+                official_commit=entry["target"]["commit"],
+                fork_commit=entry["source"]["commit"],
+                base_commits={"0.1.183": entry["source"]["base_commit"]},
+            )
+            first = detect_updates.resolve_snapshot(root, client)
+            manifest_path = root / "payload" / "fork-replays" / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["replays"][0]["overdraft_revision"] = 2
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            second = detect_updates.resolve_snapshot(root, client)
+
+            self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+            self.assertNotEqual(first["release_tag"], second["release_tag"])
+            self.assertEqual(second["release_version"], "0.1.185-overdraft.2")
+
+    def test_builder_rejects_custom_detection_without_a_local_approval(self):
+        detection = {
+            "official": {"version": "0.1.185", "commit": "a" * 40},
+            "fork": {
+                "flavor": "custom",
+                "base_version": "0.1.183",
+                "base_commit": "c" * 40,
+            },
+        }
+        with self.assertRaisesRegex(build_candidate.BuildError, "approved resolved replay"):
+            build_candidate.prepare_source(Path("/tmp"), detection)
+
+    def test_builder_applies_only_the_locked_resolved_patch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_overlay(root, "0.1.185")
+            entry = self.make_custom_replay(root)
+            self.make_build_definition(root)
+            detection = detect_updates.resolve_snapshot(
+                root,
+                FakeGitHubClient(
+                    "0.1.184-custom.1",
+                    official_version="0.1.185",
+                    official_commit=entry["target"]["commit"],
+                    fork_commit=entry["source"]["commit"],
+                    base_commits={"0.1.183": entry["source"]["base_commit"]},
+                ),
+            )
+            source = root / "source"
+            source.mkdir()
+            commands: list[list[str]] = []
+            original_root = build_candidate.ROOT
+            original_clone = build_candidate.manager.clone_official_source
+            original_run = build_candidate.run
+
+            def fake_clone(*_args, **_kwargs):
+                return source, "official-tree"
+
+            def fake_run(command, **_kwargs):
+                commands.append([str(part) for part in command])
+                return ""
+
+            build_candidate.ROOT = root
+            build_candidate.manager.clone_official_source = fake_clone
+            build_candidate.run = fake_run
+            try:
+                _, provenance = build_candidate.prepare_approved_replay(root, detection)
+            finally:
+                build_candidate.ROOT = original_root
+                build_candidate.manager.clone_official_source = original_clone
+                build_candidate.run = original_run
+
+            self.assertEqual(provenance["fork_replay_id"], entry["id"])
+            self.assertIn(
+                [
+                    "git",
+                    "apply",
+                    "--check",
+                    "--whitespace=error",
+                    str(root / "payload" / "fork-replays" / "resolved.patch"),
+                ],
+                commands,
+            )
+            self.assertFalse(
+                any(command[:3] == ["git", "diff", "--binary"] for command in commands)
+            )
 
 
 if __name__ == "__main__":

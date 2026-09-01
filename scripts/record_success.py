@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     detection = load_json(args.detection)
-    required = ("fingerprint", "release_tag", "official", "fork", "overlay")
+    required = ("fingerprint", "release_tag", "official", "fork", "replay", "overlay")
     missing = [key for key in required if key not in detection]
     if missing:
         raise ValueError(f"detection snapshot is missing: {', '.join(missing)}")
@@ -53,6 +53,7 @@ def main() -> int:
             "release_version": detection["release_version"],
             "official": detection["official"],
             "fork": detection["fork"],
+            "replay": detection["replay"],
             "overlay": detection["overlay"],
             "published_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
             "run_url": args.run_url,

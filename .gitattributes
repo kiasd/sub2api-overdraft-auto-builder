@@ -2,4 +2,7 @@
 *.png binary
 *.gz binary
 *.patch text eol=lf
+# Resolved replay artifacts carry source whitespace exactly as git apply needs it.
+# Their integrity is verified by the manifest checksum rather than text diffs.
+payload/fork-replays/*.patch -text -diff
 *.sh text eol=lf

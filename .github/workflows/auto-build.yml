@@ -99,9 +99,12 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: "1.26.6"
+          # v0.1.185 declares Go 1.27.0 in backend/go.mod. The upstream source
+          # is materialized later in a temporary worktree, so setup-go cannot
+          # use go-version-file here.
+          go-version: "1.27.0"
           cache: false
 
       - name: Set up Node.js
@@ -113,7 +116,7 @@ jobs:
         shell: bash
         run: |
           corepack enable
-          corepack prepare pnpm@10.28.2 --activate
+          corepack prepare pnpm@9.15.9 --activate
           pnpm --version
 
       - name: Build and test native candidate
