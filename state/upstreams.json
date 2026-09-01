@@ -1,34 +1,60 @@
 {
   "last_success": {
-    "fingerprint": "9784f62f7e26ea655fd1fd7a79b1297a56ea6f4c7bbbb68598337f1cf3c4fbe0",
+    "fingerprint": "4f033342c99bbb1277b44f88973fd9305c6de2a0b453a98ab9e77071176d8966",
     "fork": {
       "base_commit": "e8cb019fabf8b55199436229044cbf9aa7a82564",
       "base_version": "0.1.183",
       "branch": "codex-overdraft",
-      "commit": "ffbec131e461de0ba4cc2d90ccae64b5235f5fe7",
+      "commit": "2bfdc395e6fd0fab0fef3757748dd41a594f592d",
+      "flavor": "custom",
       "repository": "DeanZFC/sub2api-overdraft",
-      "url": "https://github.com/DeanZFC/sub2api-overdraft/commit/ffbec131e461de0ba4cc2d90ccae64b5235f5fe7",
-      "version": "0.1.183-overdraft.6"
+      "url": "https://github.com/DeanZFC/sub2api-overdraft/commit/2bfdc395e6fd0fab0fef3757748dd41a594f592d",
+      "version": "0.1.184-custom.1"
     },
     "official": {
-      "commit": "e8cb019fabf8b55199436229044cbf9aa7a82564",
-      "published_at": "2026-08-25T13:53:00Z",
+      "commit": "2ac784c51a5d0925b324efef2ba6b3446c364781",
+      "published_at": "2026-09-01T02:52:12Z",
       "repository": "Wei-Shaw/sub2api",
-      "tag": "v0.1.183",
-      "url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.183",
-      "version": "0.1.183"
+      "tag": "v0.1.185",
+      "url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.185",
+      "version": "0.1.185"
     },
     "overlay": {
       "available": true,
       "manifest_sha256": "7a6339bb75c57ff0e9ee32f275dba91dfd3c00be786b990b491302953e353019",
       "mode": "forward-replay",
       "source_version": "0.1.182",
-      "target_version": "0.1.183"
+      "target_version": "0.1.185"
     },
-    "published_at": "2026-08-27T09:59:18+00:00",
-    "release_tag": "fusion-v0.1.183-overdraft.6-e8cb019f-ffbec131-u9ec40f78",
-    "release_version": "0.1.183-overdraft.6",
-    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/33060431609"
+    "published_at": "2026-09-01T08:06:21+00:00",
+    "release_tag": "fusion-v0.1.185-overdraft.1-2ac784c5-2bfdc395-uf66ab6a4",
+    "release_version": "0.1.185-overdraft.1",
+    "replay": {
+      "entry_sha256": "fe9bac4ecbcecf81d1f5926b129677c2595344b0d075be0eef277e287bce6a12",
+      "id": "custom-0.1.184.1-to-0.1.185.1",
+      "manifest_sha256": "098e46e46460ce9097b8f3fdfb853f5326f2a423ce70f3b570cd5bf87f1db0f6",
+      "mode": "approved-resolved-patch",
+      "overdraft_revision": 1,
+      "patch": {
+        "path": "payload/fork-replays/v0.1.185-2bfdc395-resolved.patch",
+        "sha256": "0c4b5a663426b364fc28d02da5d2375b39e4d892603cbb17c1ab921303805ad3"
+      },
+      "source": {
+        "base_commit": "e8cb019fabf8b55199436229044cbf9aa7a82564",
+        "base_version": "0.1.183",
+        "branch": "codex-overdraft",
+        "commit": "2bfdc395e6fd0fab0fef3757748dd41a594f592d",
+        "feature_diff_sha256": "6c2b6a7a636634c6870de5a22602cf4a7baa7cc97ee9cf3b1b0083a4f3d9099d",
+        "repository": "DeanZFC/sub2api-overdraft",
+        "version": "0.1.184-custom.1"
+      },
+      "target": {
+        "commit": "2ac784c51a5d0925b324efef2ba6b3446c364781",
+        "repository": "Wei-Shaw/sub2api",
+        "version": "0.1.185"
+      }
+    },
+    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/33484665733"
   },
   "schema": 1
 }
