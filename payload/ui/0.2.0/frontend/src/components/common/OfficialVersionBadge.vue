@@ -126,7 +126,9 @@ const props = defineProps<{
   version?: string
 }>()
 
-const { locale, t } = useI18n()
+const { locale: i18nLocale, t } = useI18n()
+// Some isolated component tests provide only `t`; keep the badge usable there.
+const locale = i18nLocale ?? ref('zh-CN')
 const authStore = useAuthStore()
 const appStore = useAppStore()
 const rootRef = ref<HTMLElement | null>(null)
