@@ -2,26 +2,26 @@
   "schema": 1,
   "replays": [
     {
-      "id": "custom-0.1.184.1-to-0.1.185.1",
+      "id": "codexrip-0.2.0.4",
       "target": {
         "repository": "Wei-Shaw/sub2api",
-        "version": "0.1.185",
-        "commit": "2ac784c51a5d0925b324efef2ba6b3446c364781"
+        "version": "0.2.0",
+        "commit": "aa236488351eb71e120fc2b6fb32e36b0374c918"
       },
       "source": {
-        "repository": "DeanZFC/sub2api-overdraft",
-        "branch": "codex-overdraft",
-        "version": "0.1.184-custom.1",
-        "commit": "2bfdc395e6fd0fab0fef3757748dd41a594f592d",
-        "base_version": "0.1.183",
-        "base_commit": "e8cb019fabf8b55199436229044cbf9aa7a82564",
-        "feature_diff_sha256": "6c2b6a7a636634c6870de5a22602cf4a7baa7cc97ee9cf3b1b0083a4f3d9099d"
+        "repository": "HTExplicit/sub2api",
+        "branch": "main",
+        "version": "0.2.0-codexrip.4",
+        "commit": "2315662ff5031942d45822bde9a9aec39181bf2c",
+        "base_version": "0.2.0",
+        "base_commit": "aa236488351eb71e120fc2b6fb32e36b0374c918",
+        "feature_diff_sha256": "f25d7746af60b2f34e52b430ac9c49eb2e156ae3b4bd0dc223da7bebe0723f93"
       },
       "patch": {
-        "path": "payload/fork-replays/v0.1.185-2bfdc395-resolved.patch",
-        "sha256": "0c4b5a663426b364fc28d02da5d2375b39e4d892603cbb17c1ab921303805ad3"
+        "path": "payload/fork-replays/v0.2.0-codexrip-latest.patch",
+        "sha256": "f25d7746af60b2f34e52b430ac9c49eb2e156ae3b4bd0dc223da7bebe0723f93"
       },
-      "overdraft_revision": 1
+      "overdraft_revision": 4
     }
   ]
 }

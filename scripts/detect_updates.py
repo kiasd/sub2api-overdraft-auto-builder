@@ -17,11 +17,11 @@ from typing import Any
 
 
 OFFICIAL_REPOSITORY = os.environ.get("SUB2API_OFFICIAL_REPOSITORY", "Wei-Shaw/sub2api")
-FORK_REPOSITORY = os.environ.get("SUB2API_FORK_REPOSITORY", "DeanZFC/sub2api-overdraft")
-FORK_BRANCH = os.environ.get("SUB2API_FORK_BRANCH", "codex-overdraft")
+FORK_REPOSITORY = os.environ.get("SUB2API_FORK_REPOSITORY", "HTExplicit/sub2api")
+FORK_BRANCH = os.environ.get("SUB2API_FORK_BRANCH", "main")
 API_ROOT = "https://api.github.com"
 VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+)$")
-FORK_VERSION_RE = re.compile(r"^(\d+\.\d+\.\d+)-(overdraft|custom)\.(\d+)$")
+FORK_VERSION_RE = re.compile(r"^(\d+\.\d+\.\d+)-(overdraft|custom|codexrip)\.(\d+)$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 REPLAY_MANIFEST_PATH = Path("payload/fork-replays/manifest.json")
 BUILD_DEFINITION_PATHS = (
@@ -232,8 +232,10 @@ def load_approved_replays(root: Path) -> tuple[str, list[dict[str, Any]]]:
         # A custom release label is not necessarily its Git merge base. The
         # independently audited base below is the value used for replay.
         _, source_flavor, _ = parse_fork_version(source_version)
-        if source_flavor != "custom":
-            raise DetectionError(f"approved replay {replay_id} must lock a custom source")
+        if source_flavor not in {"custom", "codexrip"}:
+            raise DetectionError(
+                f"approved replay {replay_id} must lock a custom or codexrip source"
+            )
         source_base_version = normalize_version(str(source.get("base_version", "")))
         patch_value = str(patch.get("path", ""))
         patch_path = replay_file(root, patch_value)
@@ -316,18 +318,27 @@ def resolve_approved_replay(
 
 
 def read_fork_version(client: GitHubClient, commit: str) -> str:
-    payload = client.get(
-        f"/repos/{FORK_REPOSITORY}/contents/FORK_VERSION?ref={urllib.parse.quote(commit, safe='')}"
-    )
-    if not isinstance(payload, dict) or payload.get("encoding") != "base64":
-        raise DetectionError("Fork returned an unsupported FORK_VERSION payload")
     try:
+        payload = client.get(
+            f"/repos/{FORK_REPOSITORY}/contents/FORK_VERSION?ref={urllib.parse.quote(commit, safe='')}"
+        )
+        if not isinstance(payload, dict) or payload.get("encoding") != "base64":
+            raise DetectionError("Fork returned an unsupported FORK_VERSION payload")
         encoded = "".join(str(payload.get("content", "")).split())
         value = base64.b64decode(encoded, validate=True).decode("utf-8").strip()
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise DetectionError("Fork returned an invalid FORK_VERSION payload") from exc
-    parse_fork_version(value)
-    return value
+        parse_fork_version(value)
+        return value
+    except (DetectionError, ValueError, UnicodeDecodeError):
+        # HTExplicit publishes codexrip versions as Releases and does not carry
+        # the legacy FORK_VERSION file. The Release is still validated below
+        # and the source commit remains pinned independently.
+        release = client.get(f"/repos/{FORK_REPOSITORY}/releases/latest")
+        if not isinstance(release, dict):
+            raise DetectionError("Fork latest Release payload is invalid")
+        tag = str(release.get("tag_name", "")).strip()
+        value = tag[1:] if tag.startswith("v") else tag
+        parse_fork_version(value)
+        return value
 
 
 def resolve_snapshot(repository_root: Path, client: GitHubClient) -> dict[str, Any]:
@@ -360,7 +371,7 @@ def resolve_snapshot(repository_root: Path, client: GitHubClient) -> dict[str, A
         "url": str(release.get("html_url", "")),
     }
     replay: dict[str, Any]
-    if fork_flavor == "custom":
+    if fork_flavor in {"custom", "codexrip"}:
         replay = resolve_approved_replay(
             repository_root,
             {
@@ -375,7 +386,10 @@ def resolve_snapshot(repository_root: Path, client: GitHubClient) -> dict[str, A
         )
         fork_base_version = str(replay["source"]["base_version"])
         fork_base_commit = str(replay["source"]["base_commit"])
-        release_version = f"{official_version}-overdraft.{replay['overdraft_revision']}"
+        release_flavor = "overdraft" if fork_flavor == "custom" else fork_flavor
+        release_version = (
+            f"{official_version}-{release_flavor}.{replay['overdraft_revision']}"
+        )
     else:
         fork_base_version = fork_label_version
         fork_base_commit = ""

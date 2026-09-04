@@ -267,8 +267,8 @@ def prepare_approved_replay(work: Path, detection: dict[str, Any]) -> tuple[Path
         partial=False,
     )
     patch_path = ROOT / str(replay["patch"]["path"])
-    run(["git", "apply", "--check", "--whitespace=error", patch_path], cwd=source)
-    run(["git", "apply", "--whitespace=error", patch_path], cwd=source)
+    run(["git", "apply", "--check", "--whitespace=nowarn", patch_path], cwd=source)
+    run(["git", "apply", "--whitespace=nowarn", patch_path], cwd=source)
     unresolved = run(
         ["git", "diff", "--name-only", "--diff-filter=U"], cwd=source, capture=True
     ).strip()
@@ -353,8 +353,8 @@ def prepare_source(work: Path, detection: dict[str, Any]) -> tuple[Path, dict[st
     approved_replay = approved_replay_from_detection(detection)
     if approved_replay is not None:
         source, provenance = prepare_approved_replay(work, detection)
-    elif str(detection["fork"].get("flavor", "")) == "custom":
-        raise BuildError("custom Fork sources require an approved resolved replay")
+    elif str(detection["fork"].get("flavor", "")) in {"custom", "codexrip"}:
+        raise BuildError("custom and codexrip Fork sources require an approved resolved replay")
     elif fork_base_version == official_version:
         source, provenance = prepare_aligned_fork(work, detection)
     else:

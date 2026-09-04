@@ -31,7 +31,7 @@ def main() -> int:
 
 - 官方项目：[Wei-Shaw/sub2api](https://github.com/{official['repository']})
 - 官方版本：[`{official['tag']}`]({official['url']})，提交 [`{official['commit']}`](https://github.com/{official['repository']}/commit/{official['commit']})
-- 透支项目：[DeanZFC/sub2api-overdraft](https://github.com/{fork['repository']}/tree/{fork['branch']})
+- 融合项目：[HTExplicit/sub2api](https://github.com/{fork['repository']}/tree/{fork['branch']})
 - 透支版本：`{fork['version']}`，提交 [`{fork['commit']}`]({fork['url']})
 
 ## 构建结果

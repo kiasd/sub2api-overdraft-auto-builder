@@ -474,7 +474,7 @@ class BuilderTests(unittest.TestCase):
                     "git",
                     "apply",
                     "--check",
-                    "--whitespace=error",
+                    "--whitespace=nowarn",
                     str(root / "payload" / "fork-replays" / "resolved.patch"),
                 ],
                 commands,

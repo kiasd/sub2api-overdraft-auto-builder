@@ -7,8 +7,8 @@ Official Sub2API:
   https://github.com/Wei-Shaw/sub2api
   License: LGPL-3.0
 
-Overdraft feature branch:
-  https://github.com/DeanZFC/sub2api-overdraft/tree/codex-overdraft
+Downstream feature branch:
+  https://github.com/HTExplicit/sub2api/tree/main
   License: LGPL-3.0
 
 The generated artifacts contain code from those projects plus the versioned UI

@@ -1,11 +1,11 @@
 # Sub2API Overdraft Auto Builder
 
-面向原生 Linux 部署的 Sub2API 私有融合构建流水线。仓库定时跟踪官方版本和透支分支，把透支功能与版本化二次元 UI overlay 合并到临时源码树；只有编译和测试全部通过后，才发布可供面板人工应用的候选包。
+面向原生 Linux 部署的 Sub2API 私有融合构建流水线。仓库定时跟踪官方版本和 HTExplicit codexrip 分支，把其功能与版本化二次元 UI overlay 合并到临时源码树；只有编译和测试全部通过后，才发布可供面板人工应用的候选包。
 
 ## 上游项目
 
 - 官方项目：[Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api)
-- 透支功能：[DeanZFC/sub2api-overdraft](https://github.com/DeanZFC/sub2api-overdraft/tree/codex-overdraft)
+- 融合功能：[HTExplicit/sub2api](https://github.com/HTExplicit/sub2api/tree/main)
 
 本仓库不是上述项目的官方发布渠道。两个上游项目均使用 LGPL-3.0；完整归属见 [NOTICE](NOTICE)，每个 Release 的 `build-metadata.json` 会记录实际使用的版本、提交和 SHA-256。
 
@@ -15,7 +15,7 @@
 每 4 小时 / 手动触发
         |
         v
-锁定官方 Release 提交 + 透支分支提交 + UI 清单
+锁定官方 Release 提交 + HTExplicit 提交 + UI 清单
         |
         v
 计算输入指纹，未变化则停止
@@ -35,8 +35,8 @@
 
 - [auto-build.yml](.github/workflows/auto-build.yml) 每 4 小时检测一次，也支持手动强制构建。
 - [validate.yml](.github/workflows/validate.yml) 校验 Python、UI 清单、密钥泄露和单元测试。
-- 官方版本与透支分支基线一致时，直接构建锁定提交的透支分支源码。
-- 官方版本领先时，从透支分支生成二进制 Git diff，并对新的官方提交执行三方重放。
+- 官方 `v0.2.0` 与 HTExplicit 的合并基线一致时，重放锁定的 codexrip 变更。
+- 官方版本领先时，从 HTExplicit 提交生成的审核补丁对新的官方提交执行三方重放。
 - UI 没有精确版本时，会尝试重放最近的旧 overlay，但会先校验每个被 overlay 覆盖的上游文件 SHA-256；任何文件漂移或原本不存在的目标文件出现时都会停止发布并要求人工适配。任何校验、类型检查、测试或编译失败也都会阻止发布。
 - 构建作业只有仓库只读权限；发布作业不执行上游代码。
 
@@ -45,7 +45,7 @@
 每个成功 Release 包含：
 
 - `sub2api`：Linux amd64 原生二进制。
-- `build-metadata.json`：官方、透支分支、UI overlay 和测试证据。
+- `build-metadata.json`：官方、HTExplicit、UI overlay 和测试证据。
 - `SHA256SUMS`：所有发布文件的 SHA-256。
 - `fusion-*.tar.gz`：包含二进制、元数据、许可证和归属声明的部署包。
 

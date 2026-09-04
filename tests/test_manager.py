@@ -306,7 +306,7 @@ class ManagerTests(unittest.TestCase):
             [
                 {
                     "name": "sub2api-overdraft-v0.1.178-e0c48a19e.patch",
-                    "url": "https://api.github.com/repos/DeanZFC/sub2api-overdraft/contents/patches/example",
+                "url": "https://api.github.com/repos/HTExplicit/sub2api/contents/patches/example",
                 }
             ],
             {
@@ -329,7 +329,7 @@ class ManagerTests(unittest.TestCase):
             [
                 {
                     "name": "sub2api-overdraft-v0.1.178-e0c48a19e.patch",
-                    "url": "https://api.github.com/repos/DeanZFC/sub2api-overdraft/contents/patches/example",
+                "url": "https://api.github.com/repos/HTExplicit/sub2api/contents/patches/example",
                 }
             ],
             {"encoding": "base64", "content": "cGF0Y2g="},

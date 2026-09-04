@@ -41,14 +41,14 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 PLUGIN_ID = "sub2api-overdraft-native-manager"
 OFFICIAL_REPO = os.environ.get("SUB2API_OFFICIAL_REPOSITORY", "Wei-Shaw/sub2api")
 OFFICIAL_RELEASES_URL = f"https://api.github.com/repos/{OFFICIAL_REPO}/releases/latest"
-GITHUB_REPO = os.environ.get("SUB2API_FORK_REPOSITORY", "DeanZFC/sub2api-overdraft")
-GITHUB_BRANCH = os.environ.get("SUB2API_FORK_BRANCH", "codex-overdraft")
+GITHUB_REPO = os.environ.get("SUB2API_FORK_REPOSITORY", "HTExplicit/sub2api")
+GITHUB_BRANCH = os.environ.get("SUB2API_FORK_BRANCH", "main")
 BUILDER_REPO = os.environ.get(
     "SUB2API_BUILDER_REPOSITORY", "kiasd/sub2api-overdraft-auto-builder"
 )
 BUILDER_API_ROOT = f"https://api.github.com/repos/{BUILDER_REPO}"
-VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+(?:-overdraft\.\d+)?)$")
-FORK_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+-overdraft\.\d+$")
+VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+(?:-(?:overdraft|custom|codexrip)\.\d+)?)$")
+FORK_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+-(?:overdraft|custom|codexrip)\.\d+$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 GO_VERSION_RE = re.compile(r"\bgo(?P<major>\d+)\.(?P<minor>\d+)(?:\.(?P<patch>\d+))?\b")
 GO_MOD_VERSION_RE = re.compile(
@@ -64,7 +64,7 @@ UI_OVERLAY_DIR = Path(
 ).resolve()
 PATCH_FILE_RE = re.compile(r"^sub2api-overdraft-v(\d+\.\d+\.\d+)-[0-9a-f]+\.patch$")
 FUSION_RELEASE_TAG_RE = re.compile(
-    r"^fusion-v(\d+\.\d+\.\d+-overdraft\.\d+)-[0-9a-f]{8}-[0-9a-f]{8}-u[0-9a-f]{8}$"
+    r"^fusion-v(\d+\.\d+\.\d+-(?:overdraft|custom|codexrip)\.\d+)-[0-9a-f]{8}-[0-9a-f]{8}-u[0-9a-f]{8}$"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 AUTO_UPDATE_DEFAULT_MIN_HOURS = 3
@@ -175,13 +175,14 @@ def normalize_version(value: str) -> str:
 
 def version_key(value: str) -> tuple[int, int, int, int]:
     normalized = normalize_version(value)
-    base, _, suffix = normalized.partition("-overdraft.")
+    base = re.split(r"-(?:overdraft|custom|codexrip)\.", normalized, maxsplit=1)[0]
+    suffix_match = re.search(r"-(?:overdraft|custom|codexrip)\.(\d+)$", normalized)
     major, minor, patch = (int(part) for part in base.split("."))
-    return major, minor, patch, int(suffix) if suffix else -1
+    return major, minor, patch, int(suffix_match.group(1)) if suffix_match else -1
 
 
 def channel_for_version(value: str) -> str:
-    return "overdraft" if "-overdraft." in normalize_version(value) else "official"
+    return "overdraft" if "-" in normalize_version(value) else "official"
 
 
 def validate_channel(channel: str) -> str:
@@ -518,17 +519,21 @@ def latest_fork() -> dict[str, Any]:
     commit = str(commit_data.get("sha", "")).lower()
     if not COMMIT_RE.fullmatch(commit):
         raise ManagerError("GitHub returned an invalid Fork commit")
-    file_data = fetch_json(
-        f"https://api.github.com/repos/{GITHUB_REPO}/contents/FORK_VERSION?ref={commit}"
-    )
-    if file_data.get("encoding") != "base64":
-        raise ManagerError("GitHub returned an unsupported FORK_VERSION encoding")
     try:
+        file_data = fetch_json(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/FORK_VERSION?ref={commit}"
+        )
+        if file_data.get("encoding") != "base64":
+            raise ManagerError("GitHub returned an unsupported FORK_VERSION encoding")
         encoded = "".join(str(file_data.get("content", "")).split())
         raw_version = base64.b64decode(encoded, validate=True).decode("utf-8")
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise ManagerError("GitHub returned an invalid FORK_VERSION payload") from exc
-    version = normalize_version(raw_version)
+        version = normalize_version(raw_version)
+    except (ManagerError, ValueError, UnicodeDecodeError):
+        # HTExplicit identifies its immutable downstream line with a Release
+        # tag instead of the legacy FORK_VERSION file.
+        release = fetch_json(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
+        tag = str(release.get("tag_name", "")).strip()
+        version = normalize_version(tag[1:] if tag.startswith("v") else tag)
     if not FORK_VERSION_RE.fullmatch(version):
         raise ManagerError(f"invalid Fork version: {version!r}")
     return {
