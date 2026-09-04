@@ -262,8 +262,10 @@ def load_approved_replays(root: Path) -> tuple[str, list[dict[str, Any]]]:
             or sha256_file(patch_path) != patch_sha256
         ):
             raise DetectionError(f"approved replay {replay_id} checksum validation failed")
+        patch_bytes = patch_path.read_bytes()
         if excluded_paths and any(
-            path.encode("utf-8") in patch_path.read_bytes() for path in excluded_paths
+            f"diff --git a/{path} b/{path}".encode("utf-8") in patch_bytes
+            for path in excluded_paths
         ):
             raise DetectionError(f"approved replay {replay_id} still contains an excluded path")
         target_repository = str(target.get("repository", "")).strip()
