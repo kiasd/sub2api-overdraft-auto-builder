@@ -69,6 +69,8 @@ def adapt_remote_skill_seed_for_go_embed(source: Path) -> dict[str, Any]:
 
     adapted = 0
     renamed: set[str] = set()
+    assigned: set[Path] = set()
+    physical_files = [path for path in tree_root.rglob("*") if path.is_file()]
     for entry in entries:
         if not isinstance(entry, dict) or entry.get("source_kind") != "upstream":
             continue
@@ -77,7 +79,23 @@ def adapt_remote_skill_seed_for_go_embed(source: Path) -> dict[str, Any]:
             raise BuildError("remote skill manifest contains an empty upstream path")
         physical = tree_root.joinpath(*Path(logical).parts)
         if not physical.is_file():
-            raise BuildError(f"remote skill seed file is missing: {logical}")
+            expected_length = entry.get("byte_length")
+            expected_hash = str(entry.get("sha256", "")).lower()
+            candidates = []
+            for candidate in physical_files:
+                if candidate in assigned or not candidate.is_file():
+                    continue
+                if isinstance(expected_length, int) and candidate.stat().st_size != expected_length:
+                    continue
+                if hashlib.sha256(candidate.read_bytes()).hexdigest() == expected_hash:
+                    candidates.append(candidate)
+            if len(candidates) != 1:
+                raise BuildError(
+                    f"remote skill seed file is missing or ambiguous: {logical} "
+                    f"(content matches={len(candidates)})"
+                )
+            physical = candidates[0]
+        assigned.add(physical)
         relative = physical.relative_to(tree_root).as_posix()
         if all(ord(char) < 128 for char in relative):
             entry.pop("embedded_path", None)

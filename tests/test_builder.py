@@ -201,10 +201,22 @@ class BuilderTests(unittest.TestCase):
             root = Path(temporary)
             tree = root / "backend" / "internal" / "service" / "remote_skill_seed" / "tree" / "docs"
             tree.mkdir(parents=True)
-            (tree / "认证.md").write_text("ok", encoding="utf-8")
+            (tree / "u-认证.md").write_text("ok", encoding="utf-8")
             seed = tree.parent.parent
             (seed / "manifest.json").write_text(
-                json.dumps({"files": [{"path": "docs/认证.md", "source_kind": "upstream"}]}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "files": [
+                            {
+                                "path": "docs/认证.md",
+                                "source_kind": "upstream",
+                                "byte_length": 2,
+                                "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
                 encoding="utf-8",
             )
             registry = root / "backend" / "internal" / "service" / "remote_skill_registry_manifest.go"
