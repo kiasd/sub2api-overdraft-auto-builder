@@ -22,7 +22,13 @@ FORK_BRANCH = os.environ.get("SUB2API_FORK_BRANCH", "main")
 API_ROOT = "https://api.github.com"
 VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+)$")
 FORK_VERSION_RE = re.compile(r"^(\d+\.\d+\.\d+)-(overdraft|custom|codexrip)\.(\d+)$")
-ALLOWED_REPLAY_EXCLUDED_PATHS = frozenset({".github/workflows/ssh-deploy-key-probe.yml"})
+ALLOWED_REPLAY_EXCLUDED_PATHS = frozenset(
+    {
+        ".github/workflows/production-deploy.yml",
+        ".github/workflows/ssh-deploy-key-probe.yml",
+        ".github/workflows/upstream-auto-deploy.yml",
+    }
+)
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 REPLAY_MANIFEST_PATH = Path("payload/fork-replays/manifest.json")
 BUILD_DEFINITION_PATHS = (
