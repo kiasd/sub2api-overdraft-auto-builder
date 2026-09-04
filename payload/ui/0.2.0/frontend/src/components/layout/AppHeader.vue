@@ -26,6 +26,24 @@
         <!-- Announcement Bell -->
         <AnnouncementBell v-if="user" />
 
+        <button
+          v-if="authStore.isAdmin"
+          type="button"
+          data-test="account-task-button"
+          class="relative flex h-9 w-9 items-center justify-center rounded-lg text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-dark-300 dark:hover:bg-dark-800 dark:hover:text-white"
+          :aria-label="t('admin.accountTasks.drawerTitle')"
+          :title="t('admin.accountTasks.drawerTitle')"
+          @click="accountJobsStore.openDrawer"
+        >
+          <Icon name="clipboard" size="sm" />
+          <span
+            v-if="accountJobsStore.activeCount > 0"
+            class="absolute -right-1 -top-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary-600 px-1 text-[10px] font-semibold text-white"
+          >
+            {{ accountJobsStore.activeCount > 99 ? '99+' : accountJobsStore.activeCount }}
+          </span>
+        </button>
+
         <!-- Docs Link -->
         <a
           v-if="docUrl"
@@ -253,7 +271,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
+import { useAccountJobsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import SubscriptionProgressMini from '@/components/common/SubscriptionProgressMini.vue'
@@ -267,6 +285,7 @@ const route = useRoute()
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const accountJobsStore = useAccountJobsStore()
 const adminSettingsStore = useAdminSettingsStore()
 const onboardingStore = useOnboardingStore()
 

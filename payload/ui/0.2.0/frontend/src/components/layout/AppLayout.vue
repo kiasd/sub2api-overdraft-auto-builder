@@ -38,6 +38,8 @@
         </div>
       </main>
     </div>
+
+    <AccountTaskDrawer v-if="isAdmin" />
   </div>
 </template>
 
@@ -51,6 +53,7 @@ import { useOnboardingTour } from '@/composables/useOnboardingTour'
 import { useOnboardingStore } from '@/stores/onboarding'
 import AppSidebar from './AppSidebar.vue'
 import AppHeader from './AppHeader.vue'
+import AccountTaskDrawer from '@/components/admin/account-jobs/AccountTaskDrawer.vue'
 import supportMascot from '@/assets/anime/support-mascot.png'
 
 const appStore = useAppStore()

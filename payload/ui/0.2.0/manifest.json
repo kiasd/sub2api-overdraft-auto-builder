@@ -35,17 +35,17 @@
     },
     {
       "path": "frontend/src/components/layout/AppLayout.vue",
-      "sha256": "9ecf9b380ab7e3269dd241a718fec85f3e43c2826d929d1232f370109d1806ce",
+      "sha256": "e285b8e26cc03e618bdb865677ab6f9036e13182d7a66e3438cba668b335be8e",
       "source_sha256": "0224607d8bece10c0584de8c19478856cabc54531c66da368b4513efaec827f5"
     },
     {
       "path": "frontend/src/components/layout/AppHeader.vue",
-      "sha256": "fa5f9e39629995c0c7027da5860723f911c0ac9de354206e67e0fd5f99638958",
+      "sha256": "718ac3387f501260da79fe3823605d389ff6717f2bb1d77f585fc606b3035174",
       "source_sha256": "a4c78b8cc4f5c5750a876f93156aeb5519efbdbf51c2e386ba3ab7a3f3e2ddff"
     },
     {
       "path": "frontend/src/components/layout/AppSidebar.vue",
-      "sha256": "556eebe275a7c9d0cca8e90d1fabed17b51a65f98039197f0abe0264647b869a",
+      "sha256": "cde1e11d1e1d860280388256b83a9b6c81ba8b5844b22dea1f7517f6f08b758f",
       "source_sha256": "bb22e2f49ffad2d30c802c9dd429e259248d7ea76dd942092116d227fc2a3e5b"
     },
     {

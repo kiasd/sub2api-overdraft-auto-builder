@@ -101,6 +101,27 @@
           </template>
         </div>
 
+        <div v-if="adminExtensionNavItems.length" class="sidebar-section" data-testid="sidebar-extensions">
+          <div class="sidebar-section-title" :class="{ 'sidebar-section-title-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
+            <span class="sidebar-section-title-text" :class="{ 'sidebar-section-title-text-collapsed': sidebarCollapsed }">
+              {{ t('nav.extensions') }}
+            </span>
+          </div>
+
+          <router-link
+            v-for="item in adminExtensionNavItems"
+            :key="item.path"
+            :to="item.path"
+            class="sidebar-link mb-1"
+            :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
+            :title="sidebarCollapsed ? item.label : undefined"
+            @click="handleMenuItemClick(item.path)"
+          >
+            <component :is="item.icon" class="h-5 w-5 flex-shrink-0" />
+            <span class="sidebar-label" :class="{ 'sidebar-label-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">{{ item.label }}</span>
+          </router-link>
+        </div>
+
         <!-- Personal Section for Admin (hidden in simple mode) -->
         <div v-if="!authStore.isSimpleMode" class="sidebar-section">
           <div class="sidebar-section-title" :class="{ 'sidebar-section-title-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
@@ -141,6 +162,27 @@
           >
             <span v-if="item.iconSvg" class="h-5 w-5 flex-shrink-0 sidebar-svg-icon" v-html="sanitizeSvg(item.iconSvg)"></span>
             <component v-else :is="item.icon" class="h-5 w-5 flex-shrink-0" />
+            <span class="sidebar-label" :class="{ 'sidebar-label-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">{{ item.label }}</span>
+          </router-link>
+        </div>
+
+        <div v-if="userExtensionNavItems.length" class="sidebar-section" data-testid="sidebar-extensions">
+          <div class="sidebar-section-title" :class="{ 'sidebar-section-title-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
+            <span class="sidebar-section-title-text" :class="{ 'sidebar-section-title-text-collapsed': sidebarCollapsed }">
+              {{ t('nav.extensions') }}
+            </span>
+          </div>
+
+          <router-link
+            v-for="item in userExtensionNavItems"
+            :key="item.path"
+            :to="item.path"
+            class="sidebar-link mb-1"
+            :class="{ 'sidebar-link-active': isActive(item.path), 'sidebar-link-collapsed': sidebarCollapsed }"
+            :title="sidebarCollapsed ? item.label : undefined"
+            @click="handleMenuItemClick(item.path)"
+          >
+            <component :is="item.icon" class="h-5 w-5 flex-shrink-0" />
             <span class="sidebar-label" :class="{ 'sidebar-label-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">{{ item.label }}</span>
           </router-link>
         </div>
@@ -537,6 +579,21 @@ const CogIcon = {
     )
 }
 
+const DocumentIcon = {
+  render: () =>
+    h(
+      'svg',
+      { fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': '1.5' },
+      [
+        h('path', {
+          'stroke-linecap': 'round',
+          'stroke-linejoin': 'round',
+          d: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'
+        })
+      ]
+    )
+}
+
 const SunIcon = {
   render: () =>
     h(
@@ -698,6 +755,7 @@ const ChevronDownIcon = {
 const flagChannelMonitor = makeSidebarFlag(FeatureFlags.channelMonitor)
 const flagPayment = makeSidebarFlag(FeatureFlags.payment)
 const flagAvailableChannels = makeSidebarFlag(FeatureFlags.availableChannels)
+const flagImageStudio = makeSidebarFlag(FeatureFlags.imageStudio)
 const flagAffiliate = makeSidebarFlag(FeatureFlags.affiliate)
 const flagRiskControl = makeSidebarFlag(FeatureFlags.riskControl)
 const flagPluginManagement = makeSidebarFlag(FeatureFlags.pluginManagement)
@@ -751,6 +809,18 @@ const userNavItems = computed((): NavItem[] => finalizeNav(buildSelfNavItems(tru
 // separate admin entry, since the page is purely a user-facing view.
 const personalNavItems = computed((): NavItem[] => finalizeNav(buildSelfNavItems(false)))
 
+function buildExtensionNavItems(includeAdmin: boolean): NavItem[] {
+  const items: NavItem[] = []
+  if (includeAdmin) {
+    items.push({ path: '/admin/cindy-accounts', label: t('nav.cindyAccounts'), icon: GlobeIcon })
+  }
+  items.push({ path: '/image-studio', label: t('nav.imageStudio'), icon: BatchImageIcon, featureFlag: flagImageStudio })
+  return items
+}
+
+const userExtensionNavItems = computed(() => finalizeNav(buildExtensionNavItems(false)))
+const adminExtensionNavItems = computed(() => finalizeNav(buildExtensionNavItems(true)))
+
 // Custom menu items filtered by visibility
 const customMenuItemsForUser = computed(() => {
   const items = appStore.cachedPublicSettings?.custom_menu_items ?? []
@@ -786,6 +856,7 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/subscriptions', label: t('nav.subscriptions'), icon: CreditCardIcon, hideInSimpleMode: true },
     { path: '/admin/accounts', label: t('nav.accounts'), icon: GlobeIcon },
     { path: '/admin/plugins', label: t('nav.plugins'), icon: PluginIcon, featureFlag: flagPluginManagement },
+    { path: '/admin/tasks', label: t('nav.tasks'), icon: DocumentIcon },
     { path: '/admin/announcements', label: t('nav.announcements'), icon: BellIcon },
     { path: '/admin/proxies', label: t('nav.proxies'), icon: ServerIcon },
     {
@@ -828,7 +899,8 @@ const adminNavItems = computed((): NavItem[] => {
       ],
     },
     { path: '/admin/usage', label: t('nav.usage'), icon: ChartIcon },
-    { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: ShieldIcon, hideInSimpleMode: true }
+    { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: ShieldIcon, hideInSimpleMode: true },
+    { path: '/admin/system-prompts', label: t('nav.systemPrompts'), icon: DocumentIcon }
   ]
 
   const visible = applyFeatureFlags(baseItems)
