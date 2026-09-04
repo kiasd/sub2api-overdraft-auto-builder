@@ -36,8 +36,14 @@
 - [auto-build.yml](.github/workflows/auto-build.yml) 每 4 小时检测一次，也支持手动强制构建。
 - [validate.yml](.github/workflows/validate.yml) 校验 Python、UI 清单、密钥泄露和单元测试。
 - 官方 `v0.2.0` 与 HTExplicit 的合并基线一致时，重放锁定的 codexrip 变更。
+- 当前 `v0.2.0-codexrip.4` 重放明确排除 HTExplicit 临时的
+  `.github/workflows/ssh-deploy-key-probe.yml`；该工作流会读取生产环境 SSH
+  密钥并连接目标主机，不属于本自用包。排除项会写入 `build-metadata.json`，检测器
+  也会拒绝包含该路径的补丁。
 - 官方版本领先时，从 HTExplicit 提交生成的审核补丁对新的官方提交执行三方重放。
 - UI 没有精确版本时，会尝试重放最近的旧 overlay，但会先校验每个被 overlay 覆盖的上游文件 SHA-256；任何文件漂移或原本不存在的目标文件出现时都会停止发布并要求人工适配。任何校验、类型检查、测试或编译失败也都会阻止发布。
+- 远程技能种子中的 Unicode 文件名只在临时构建树中转换为确定性的 ASCII 嵌入名，
+  逻辑路径与内容哈希不变，避免 Go `embed` 工具链差异导致误报构建失败。
 - 构建作业只有仓库只读权限；发布作业不执行上游代码。
 
 ## 产物

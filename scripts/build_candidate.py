@@ -379,6 +379,7 @@ def prepare_approved_replay(work: Path, detection: dict[str, Any]) -> tuple[Path
         "fork_replay_patch_sha256": str(replay["patch"]["sha256"]),
         "fork_replay_id": str(replay["id"]),
         "fork_replay_source_mode": "approved-resolved-patch",
+        "fork_replay_excluded_paths": list(replay["source"].get("excluded_paths", [])),
     }
 
 
