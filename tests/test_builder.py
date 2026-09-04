@@ -196,6 +196,38 @@ class BuilderTests(unittest.TestCase):
                 with self.assertRaises(build_candidate.BuildError):
                     build_candidate.safe_relative_path(value)
 
+    def test_remote_skill_seed_adapts_unicode_embed_names_without_changing_logical_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tree = root / "backend" / "internal" / "service" / "remote_skill_seed" / "tree" / "docs"
+            tree.mkdir(parents=True)
+            (tree / "认证.md").write_text("ok", encoding="utf-8")
+            seed = tree.parent.parent
+            (seed / "manifest.json").write_text(
+                json.dumps({"files": [{"path": "docs/认证.md", "source_kind": "upstream"}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            registry = root / "backend" / "internal" / "service" / "remote_skill_registry_manifest.go"
+            registry.write_text(
+                "\t\tcase \"upstream\":\n"
+                "\t\t\tupstreamCount++\n"
+                "\t\t\tif entry.EmbeddedPath != \"\" || entry.Provenance != nil {\n"
+                "\t\t\t\treturn fmt.Errorf(\"%w: upstream manifest entry has pinned metadata\", ErrBusinessSystemPromptBundleInvalid)\n"
+                "\t\t\t}\n"
+                "\t\t\tbody, ok = upstreamFiles[entry.Path]",
+                encoding="utf-8",
+            )
+
+            result = build_candidate.adapt_remote_skill_seed_for_go_embed(root)
+            self.assertEqual(result["remote_skill_embed_adaptation"], "ascii-physical-names")
+            manifest = json.loads((seed / "manifest.json").read_text(encoding="utf-8"))
+            entry = manifest["files"][0]
+            self.assertEqual(entry["path"], "docs/认证.md")
+            self.assertTrue(entry["embedded_path"].startswith("tree/docs/__unicode_"))
+            self.assertTrue((seed / entry["embedded_path"]).is_file())
+            rewritten = registry.read_text(encoding="utf-8")
+            self.assertIn("lookupPath := entry.Path", rewritten)
+
     def test_replay_base_is_fetched_from_the_full_shallow_clone(self):
         commands: list[list[str]] = []
 

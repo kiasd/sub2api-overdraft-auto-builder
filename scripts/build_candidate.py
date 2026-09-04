@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,101 @@ TEXT_SOURCE_SUFFIXES = {
 
 class BuildError(RuntimeError):
     pass
+
+
+def adapt_remote_skill_seed_for_go_embed(source: Path) -> dict[str, Any]:
+    """Give Go embed a portable physical tree while retaining logical paths.
+
+    Go toolchains used by the builder reject some Unicode filenames while
+    walking ``all:`` embed patterns.  The bundle manifest is the public
+    logical namespace, so only the temporary embedded filename is changed and
+    the manifest records the mapping for the loader.
+    """
+    seed_root = source / "backend" / "internal" / "service" / "remote_skill_seed"
+    tree_root = seed_root / "tree"
+    manifest_path = seed_root / "manifest.json"
+    registry_path = source / "backend" / "internal" / "service" / "remote_skill_registry_manifest.go"
+    if not tree_root.is_dir() or not manifest_path.is_file() or not registry_path.is_file():
+        return {"remote_skill_embed_adaptation": "not-needed"}
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BuildError(f"remote skill manifest cannot be adapted: {exc}") from exc
+    entries = manifest.get("files")
+    if not isinstance(entries, list):
+        raise BuildError("remote skill manifest cannot be adapted: files is not a list")
+
+    adapted = 0
+    renamed: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("source_kind") != "upstream":
+            continue
+        logical = str(entry.get("path", ""))
+        if not logical:
+            raise BuildError("remote skill manifest contains an empty upstream path")
+        physical = tree_root.joinpath(*Path(logical).parts)
+        if not physical.is_file():
+            raise BuildError(f"remote skill seed file is missing: {logical}")
+        relative = physical.relative_to(tree_root).as_posix()
+        if all(ord(char) < 128 for char in relative):
+            entry.pop("embedded_path", None)
+            continue
+
+        # Hash the logical path so the generated ASCII name is deterministic
+        # and cannot collide with another Unicode filename.
+        digest = hashlib.sha256(unicodedata.normalize("NFC", logical).encode("utf-8")).hexdigest()[:16]
+        suffix = physical.suffix if physical.suffix.isascii() else ".bin"
+        portable_name = f"__unicode_{digest}{suffix}"
+        destination = physical.with_name(portable_name)
+        if destination.exists() and destination != physical:
+            raise BuildError(f"remote skill portable filename collision: {logical}")
+        if destination != physical:
+            physical.rename(destination)
+            adapted += 1
+            renamed.add(logical)
+        entry["embedded_path"] = f"tree/{destination.relative_to(tree_root).as_posix()}"
+
+    if not adapted:
+        # A previous adaptation may already have supplied mappings; retain a
+        # clean manifest when the source is already portable.
+        return {"remote_skill_embed_adaptation": "not-needed"}
+
+    registry = registry_path.read_text(encoding="utf-8")
+    old_validation = """\t\tcase \"upstream\":
+\t\t\tupstreamCount++
+\t\t\tif entry.EmbeddedPath != \"\" || entry.Provenance != nil {
+\t\t\t\treturn fmt.Errorf(\"%w: upstream manifest entry has pinned metadata\", ErrBusinessSystemPromptBundleInvalid)
+\t\t\t}"""
+    new_validation = """\t\tcase \"upstream\":
+\t\t\tupstreamCount++
+\t\t\tif entry.Provenance != nil {
+\t\t\t\treturn fmt.Errorf(\"%w: upstream manifest entry has pinned metadata\", ErrBusinessSystemPromptBundleInvalid)
+\t\t\t}
+\t\t\tif entry.EmbeddedPath != \"\" {
+\t\t\t\tportable, portableErr := normalizeBundleRelativePath(strings.TrimPrefix(entry.EmbeddedPath, \"tree/\"))
+\t\t\t\tif portableErr != nil || !strings.HasPrefix(entry.EmbeddedPath, \"tree/\") || portable != strings.TrimPrefix(entry.EmbeddedPath, \"tree/\") {
+\t\t\t\t\treturn fmt.Errorf(\"%w: upstream embedded path invalid\", ErrBusinessSystemPromptBundleInvalid)
+\t\t\t\t}
+\t\t\t}"""
+    old_lookup = "\t\t\tbody, ok = upstreamFiles[entry.Path]"
+    new_lookup = """\t\t\tlookupPath := entry.Path
+\t\t\tif entry.EmbeddedPath != \"\" {
+\t\t\t\tlookupPath = strings.TrimPrefix(entry.EmbeddedPath, \"tree/\")
+\t\t\t}
+\t\t\tbody, ok = upstreamFiles[lookupPath]"""
+    if old_validation not in registry or old_lookup not in registry:
+        raise BuildError("remote skill loader shape changed; portability adaptation needs review")
+    registry = registry.replace(old_validation, new_validation, 1).replace(old_lookup, new_lookup, 1)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    registry_path.write_text(registry, encoding="utf-8", newline="\n")
+    return {
+        "remote_skill_embed_adaptation": "ascii-physical-names",
+        "remote_skill_embed_renamed_files": str(adapted),
+        "remote_skill_embed_renamed_paths_sha256": hashlib.sha256(
+            "\n".join(sorted(renamed)).encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -359,6 +455,7 @@ def prepare_source(work: Path, detection: dict[str, Any]) -> tuple[Path, dict[st
         source, provenance = prepare_aligned_fork(work, detection)
     else:
         source, provenance = prepare_replayed_fork(work, detection)
+    provenance.update(adapt_remote_skill_seed_for_go_embed(source))
     provenance.update(apply_compatible_overlay(source, detection))
     return source, provenance
 
