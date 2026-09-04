@@ -22,6 +22,7 @@ FORK_BRANCH = os.environ.get("SUB2API_FORK_BRANCH", "main")
 API_ROOT = "https://api.github.com"
 VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+)$")
 FORK_VERSION_RE = re.compile(r"^(\d+\.\d+\.\d+)-(overdraft|custom|codexrip)\.(\d+)$")
+ALLOWED_REPLAY_EXCLUDED_PATHS = frozenset({".github/workflows/ssh-deploy-key-probe.yml"})
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 REPLAY_MANIFEST_PATH = Path("payload/fork-replays/manifest.json")
 BUILD_DEFINITION_PATHS = (
@@ -241,6 +242,13 @@ def load_approved_replays(root: Path) -> tuple[str, list[dict[str, Any]]]:
         patch_path = replay_file(root, patch_value)
         patch_sha256 = str(patch.get("sha256", "")).lower()
         feature_diff_sha256 = str(source.get("feature_diff_sha256", "")).lower()
+        excluded_raw = source.get("excluded_paths", [])
+        if not isinstance(excluded_raw, list) or any(
+            not isinstance(value, str) or value not in ALLOWED_REPLAY_EXCLUDED_PATHS
+            for value in excluded_raw
+        ):
+            raise DetectionError(f"approved replay {replay_id} has unsupported excluded paths")
+        excluded_paths = sorted(set(excluded_raw))
         checked_commit(target.get("commit"), "target commit")
         if (
             not re.fullmatch(r"[0-9a-f]{64}", patch_sha256)
@@ -248,6 +256,10 @@ def load_approved_replays(root: Path) -> tuple[str, list[dict[str, Any]]]:
             or sha256_file(patch_path) != patch_sha256
         ):
             raise DetectionError(f"approved replay {replay_id} checksum validation failed")
+        if excluded_paths and any(
+            path.encode("utf-8") in patch_path.read_bytes() for path in excluded_paths
+        ):
+            raise DetectionError(f"approved replay {replay_id} still contains an excluded path")
         target_repository = str(target.get("repository", "")).strip()
         source_repository = str(source.get("repository", "")).strip()
         source_branch = str(source.get("branch", "")).strip()
@@ -269,6 +281,7 @@ def load_approved_replays(root: Path) -> tuple[str, list[dict[str, Any]]]:
                     "base_version": source_base_version,
                     "base_commit": checked_commit(source.get("base_commit"), "base commit"),
                     "feature_diff_sha256": feature_diff_sha256,
+                    **({"excluded_paths": excluded_paths} if excluded_paths else {}),
                 },
                 "patch": {"path": patch_value, "sha256": patch_sha256},
                 "overdraft_revision": revision,

@@ -12,10 +12,13 @@
         "repository": "HTExplicit/sub2api",
         "branch": "main",
         "version": "0.2.0-codexrip.4",
-        "commit": "2315662ff5031942d45822bde9a9aec39181bf2c",
+        "commit": "0cabea98ba418cee618e222a0d5b41cadb60ec9e",
         "base_version": "0.2.0",
         "base_commit": "aa236488351eb71e120fc2b6fb32e36b0374c918",
-        "feature_diff_sha256": "f25d7746af60b2f34e52b430ac9c49eb2e156ae3b4bd0dc223da7bebe0723f93"
+        "feature_diff_sha256": "f25d7746af60b2f34e52b430ac9c49eb2e156ae3b4bd0dc223da7bebe0723f93",
+        "excluded_paths": [
+          ".github/workflows/ssh-deploy-key-probe.yml"
+        ]
       },
       "patch": {
         "path": "payload/fork-replays/v0.2.0-codexrip-latest.patch",
