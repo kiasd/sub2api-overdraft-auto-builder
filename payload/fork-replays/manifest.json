@@ -12,10 +12,10 @@
         "repository": "HTExplicit/sub2api",
         "branch": "main",
         "version": "0.2.0-codexrip.4",
-        "commit": "eb9cf1a02e880ac0764c829f9ab41931b0989bc9",
+        "commit": "e6a99b21dbdf7c1dd11e89e3a14608929fa95174",
         "base_version": "0.2.0",
         "base_commit": "aa236488351eb71e120fc2b6fb32e36b0374c918",
-        "feature_diff_sha256": "2fa20810a750ac3da20924130399988ec9ecd32c343553575f51ab39f67670ba",
+        "feature_diff_sha256": "858ed920694f8aa9469adb0cad166226f582a4b49a86081eb37df259962fbed1",
         "excluded_paths": [
           ".github/workflows/production-deploy.yml",
           ".github/workflows/ssh-deploy-key-probe.yml",
@@ -24,7 +24,7 @@
       },
       "patch": {
         "path": "payload/fork-replays/v0.2.0-codexrip-latest.patch",
-        "sha256": "2fa20810a750ac3da20924130399988ec9ecd32c343553575f51ab39f67670ba"
+        "sha256": "858ed920694f8aa9469adb0cad166226f582a4b49a86081eb37df259962fbed1"
       },
       "overdraft_revision": 4
     }
