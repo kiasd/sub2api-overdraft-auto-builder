@@ -93,6 +93,10 @@ start_apply_unit() {
   printf '{"status":"accepted","unit":"%s"}\n' "$APPLY_UNIT"
 }
 
+valid_fusion_release_tag() {
+  [[ "${1:-}" =~ ^fusion-v[0-9]+\.[0-9]+\.[0-9]+-(overdraft|custom|codexrip)\.[0-9]+-[0-9a-f]{8}-[0-9a-f]{8}-u[0-9a-f]{8}$ ]]
+}
+
 case "$action" in
   status)
     [[ "$#" -eq 1 ]]
@@ -143,7 +147,7 @@ case "$action" in
     ;;
   apply-start)
     [[ "$#" -eq 3 ]]
-    [[ "$2" =~ ^fusion-v[0-9]+\.[0-9]+\.[0-9]+-overdraft\.[0-9]+-[0-9a-f]{8}-[0-9a-f]{8}-u[0-9a-f]{8}$ ]]
+    valid_fusion_release_tag "$2"
     [[ "$3" =~ ^[0-9a-f]{64}$ ]]
     acquire_control_lock
     start_apply_unit "$2" "$3"
@@ -168,7 +172,7 @@ case "$action" in
     result="$(run_manager auto-status)"
     identity="$(printf '%s\n' "$result" | python3 -c 'import json,sys; value=json.load(sys.stdin).get("auto_update", {}).get("prepared", {}); print(value.get("release_tag", ""), value.get("binary_sha256", ""))')"
     read -r release_tag binary_sha256 <<<"$identity"
-    [[ "$release_tag" =~ ^fusion-v[0-9]+\.[0-9]+\.[0-9]+-overdraft\.[0-9]+-[0-9a-f]{8}-[0-9a-f]{8}-u[0-9a-f]{8}$ ]]
+    valid_fusion_release_tag "$release_tag"
     [[ "$binary_sha256" =~ ^[0-9a-f]{64}$ ]]
     start_apply_unit "$release_tag" "$binary_sha256"
     ;;

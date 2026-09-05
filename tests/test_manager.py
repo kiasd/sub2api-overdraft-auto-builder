@@ -359,6 +359,19 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(result["version"], "0.1.177-overdraft.6")
         self.assertEqual(result["commit"], "d7716b3082f8e773b8f780e5cd8e9c11df51af1b")
 
+    def test_current_build_reads_custom_flavor_version_and_commit(self):
+        completed = mock.Mock(
+            stdout=(
+                "Sub2API 0.2.0-codexrip.4 "
+                "(commit: 2315662ff5031942d45822bde9a9aec39181bf2, built: now)\n"
+            )
+        )
+        with mock.patch.object(manager, "binary_path", return_value=ROOT / "manager.py"):
+            with mock.patch.object(manager, "run", return_value=completed):
+                result = manager.current_build()
+        self.assertEqual(result["version"], "0.2.0-codexrip.4")
+        self.assertEqual(result["commit"], "2315662ff5031942d45822bde9a9aec39181bf2")
+
     def test_safe_extract_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

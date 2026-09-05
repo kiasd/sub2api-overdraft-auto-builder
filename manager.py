@@ -881,7 +881,10 @@ def current_build() -> dict[str, str]:
         # parse both streams so backup provenance and update checks stay stable.
         version_output = f"{result.stdout or ''}\n{result.stderr or ''}"
         match = re.search(r"Sub2API\s+(\d+\.\d+\.\d+)", version_output)
-        fork_match = re.search(r"Sub2API\s+(\d+\.\d+\.\d+-overdraft\.\d+)", version_output)
+        fork_match = re.search(
+            r"Sub2API\s+(\d+\.\d+\.\d+-(?:overdraft|custom|codexrip)\.\d+)",
+            version_output,
+        )
         commit_match = re.search(r"commit:\s*([0-9a-f]{7,40})", version_output, re.IGNORECASE)
         if fork_match:
             return {

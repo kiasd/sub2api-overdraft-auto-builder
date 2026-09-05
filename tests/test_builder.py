@@ -226,7 +226,13 @@ class BuilderTests(unittest.TestCase):
                 "\t\t\tif entry.EmbeddedPath != \"\" || entry.Provenance != nil {\n"
                 "\t\t\t\treturn fmt.Errorf(\"%w: upstream manifest entry has pinned metadata\", ErrBusinessSystemPromptBundleInvalid)\n"
                 "\t\t\t}\n"
-                "\t\t\tbody, ok = upstreamFiles[entry.Path]",
+                "\t\t\tbody, ok = upstreamFiles[entry.Path]\n"
+                "\t\t}\n"
+                "\tfor name := range upstreamFiles {\n"
+                "\t\tif _, ok := files[name]; !ok {\n"
+                "\t\t\treturn fmt.Errorf(\"%w: undeclared embedded upstream file\", ErrBusinessSystemPromptBundleInvalid)\n"
+                "\t\t}\n"
+                "\t}",
                 encoding="utf-8",
             )
 
@@ -239,6 +245,8 @@ class BuilderTests(unittest.TestCase):
             self.assertTrue((seed / entry["embedded_path"]).is_file())
             rewritten = registry.read_text(encoding="utf-8")
             self.assertIn("lookupPath := entry.Path", rewritten)
+            self.assertIn("declaredEmbedded := make(map[string]struct{}", rewritten)
+            self.assertIn("if _, ok := declaredEmbedded[name]; !ok", rewritten)
 
     def test_replay_base_is_fetched_from_the_full_shallow_clone(self):
         commands: list[list[str]] = []

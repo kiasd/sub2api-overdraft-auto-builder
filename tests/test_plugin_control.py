@@ -85,6 +85,28 @@ class PluginControlTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_release_tag_validation_accepts_supported_fusion_flavors(self):
+        validator = shell_function(self.control, "valid_fusion_release_tag")
+        script = textwrap.dedent(
+            f"""
+            set -Eeuo pipefail
+            {validator}
+            valid_fusion_release_tag 'fusion-v0.2.0-overdraft.4-aa236488-e6a99b21-ub7c3ddd7'
+            valid_fusion_release_tag 'fusion-v0.2.0-custom.4-aa236488-e6a99b21-ub7c3ddd7'
+            valid_fusion_release_tag 'fusion-v0.2.0-codexrip.4-aa236488-e6a99b21-ub7c3ddd7'
+            if valid_fusion_release_tag 'fusion-v0.2.0-codexrip.4-aa236488-e6a99b21-ub7c3ddd70'; then
+              exit 1
+            fi
+            if valid_fusion_release_tag 'fusion-v0.2.0-codexrip.4-AA236488-e6a99b21-ub7c3ddd7'; then
+              exit 1
+            fi
+            """
+        )
+        result = self.run_bash(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('valid_fusion_release_tag "$2"', self.control)
+        self.assertIn('valid_fusion_release_tag "$release_tag"', self.control)
+
     def test_control_lock_is_exclusive_across_processes(self):
         acquire_control_lock = shell_function(self.control, "acquire_control_lock")
         with tempfile.TemporaryDirectory() as temporary:

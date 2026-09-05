@@ -143,9 +143,34 @@ def adapt_remote_skill_seed_for_go_embed(source: Path) -> dict[str, Any]:
 \t\t\t\tlookupPath = strings.TrimPrefix(entry.EmbeddedPath, \"tree/\")
 \t\t\t}
 \t\t\tbody, ok = upstreamFiles[lookupPath]"""
-    if old_validation not in registry or old_lookup not in registry:
+    old_undeclared = """\tfor name := range upstreamFiles {
+\t\tif _, ok := files[name]; !ok {
+\t\t\treturn fmt.Errorf(\"%w: undeclared embedded upstream file\", ErrBusinessSystemPromptBundleInvalid)
+\t\t}
+\t}"""
+    new_undeclared = """\tdeclaredEmbedded := make(map[string]struct{}, len(manifest.Files))
+\tfor _, entry := range manifest.Files {
+\t\tif entry.SourceKind != \"upstream\" {
+\t\t\tcontinue
+\t\t}
+\t\tlookupPath := entry.Path
+\t\tif entry.EmbeddedPath != \"\" {
+\t\t\tlookupPath = strings.TrimPrefix(entry.EmbeddedPath, \"tree/\")
+\t\t}
+\t\tdeclaredEmbedded[lookupPath] = struct{}{}
+\t}
+\tfor name := range upstreamFiles {
+\t\tif _, ok := declaredEmbedded[name]; !ok {
+\t\t\treturn fmt.Errorf(\"%w: undeclared embedded upstream file\", ErrBusinessSystemPromptBundleInvalid)
+\t\t}
+\t}"""
+    if old_validation not in registry or old_lookup not in registry or old_undeclared not in registry:
         raise BuildError("remote skill loader shape changed; portability adaptation needs review")
-    registry = registry.replace(old_validation, new_validation, 1).replace(old_lookup, new_lookup, 1)
+    registry = (
+        registry.replace(old_validation, new_validation, 1)
+        .replace(old_lookup, new_lookup, 1)
+        .replace(old_undeclared, new_undeclared, 1)
+    )
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     registry_path.write_text(registry, encoding="utf-8", newline="\n")
     return {
