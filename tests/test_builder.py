@@ -165,7 +165,7 @@ class BuilderTests(unittest.TestCase):
         replay = next(
             entry
             for entry in replay_manifest["replays"]
-            if entry["id"] == "codexrip-0.2.1.1"
+            if entry["id"] == "codexrip-0.2.1.2"
         )
         self.assertEqual(replay["target"]["version"], "0.2.1")
         self.assertEqual(
@@ -181,6 +181,7 @@ class BuilderTests(unittest.TestCase):
             replay["source"]["base_commit"],
             "578785ee7fb35030b094b69624efe25670a36f5f",
         )
+        self.assertEqual(replay["overdraft_revision"], 2)
         patch_path = root / replay["patch"]["path"]
         self.assertEqual(
             detect_updates.sha256_file(patch_path), replay["patch"]["sha256"]
@@ -194,6 +195,8 @@ class BuilderTests(unittest.TestCase):
                 f"diff --git a/{excluded} b/{excluded}".encode("utf-8"),
                 patch_bytes,
             )
+        self.assertNotIn(b"downstream-verify.yml", patch_bytes)
+        self.assertNotIn(b"downstream-release.yml", patch_bytes)
 
         overlay = json.loads(
             (root / "payload" / "ui" / "0.2.1" / "manifest.json").read_text(

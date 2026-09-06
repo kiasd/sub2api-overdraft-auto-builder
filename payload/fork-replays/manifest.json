@@ -29,7 +29,7 @@
       "overdraft_revision": 4
     },
     {
-      "id": "codexrip-0.2.1.1",
+      "id": "codexrip-0.2.1.2",
       "target": {
         "repository": "Wei-Shaw/sub2api",
         "version": "0.2.1",
@@ -42,7 +42,7 @@
         "commit": "57a697e7872e27a71a89606f1e599c89839c34b8",
         "base_version": "0.2.1",
         "base_commit": "578785ee7fb35030b094b69624efe25670a36f5f",
-        "feature_diff_sha256": "6e86e594c62303a0936c9bef17584f5d95525f3d5d78078494c36482d5f0e1e6",
+        "feature_diff_sha256": "ab6594bd48bfb5a66bd4388624daa4dc710bb25f41e2bfaee4dc5ef70eb7cd5b",
         "excluded_paths": [
           ".github/workflows/production-deploy.yml",
           ".github/workflows/ssh-deploy-key-probe.yml",
@@ -50,10 +50,10 @@
         ]
       },
       "patch": {
-        "path": "payload/fork-replays/v0.2.1-codexrip.1.patch",
-        "sha256": "6e86e594c62303a0936c9bef17584f5d95525f3d5d78078494c36482d5f0e1e6"
+        "path": "payload/fork-replays/v0.2.1-codexrip.2.patch",
+        "sha256": "ab6594bd48bfb5a66bd4388624daa4dc710bb25f41e2bfaee4dc5ef70eb7cd5b"
       },
-      "overdraft_revision": 1
+      "overdraft_revision": 2
     }
   ]
 }
