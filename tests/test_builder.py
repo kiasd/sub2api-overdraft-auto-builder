@@ -165,7 +165,7 @@ class BuilderTests(unittest.TestCase):
         replay = next(
             entry
             for entry in replay_manifest["replays"]
-            if entry["id"] == "codexrip-0.2.1.2"
+            if entry["id"] == "codexrip-0.2.1.3"
         )
         self.assertEqual(replay["target"]["version"], "0.2.1")
         self.assertEqual(
@@ -181,7 +181,7 @@ class BuilderTests(unittest.TestCase):
             replay["source"]["base_commit"],
             "578785ee7fb35030b094b69624efe25670a36f5f",
         )
-        self.assertEqual(replay["overdraft_revision"], 2)
+        self.assertEqual(replay["overdraft_revision"], 3)
         patch_path = root / replay["patch"]["path"]
         self.assertEqual(
             detect_updates.sha256_file(patch_path), replay["patch"]["sha256"]
@@ -195,8 +195,40 @@ class BuilderTests(unittest.TestCase):
                 f"diff --git a/{excluded} b/{excluded}".encode("utf-8"),
                 patch_bytes,
             )
-        self.assertNotIn(b"downstream-verify.yml", patch_bytes)
-        self.assertNotIn(b"downstream-release.yml", patch_bytes)
+        patch_headers = b"\n".join(
+            line for line in patch_bytes.splitlines() if line.startswith(b"diff --git ")
+        )
+        self.assertNotIn(b"downstream-verify.yml", patch_headers)
+        self.assertNotIn(b"downstream-release.yml", patch_headers)
+        for required in (
+            "backend/internal/service/remote_skill_seed/tree/scripts/env_probe.py",
+            "backend/internal/service/remote_skill_seed/tree/scripts/reusable/artifact_inventory.py",
+            "backend/internal/service/remote_skill_seed/tree/scripts/reusable/har_summary.py",
+            "backend/internal/service/remote_skill_seed/tree/scripts/reusable/new-experience-entry.ps1",
+            "backend/internal/service/remote_skill_seed/tree/scripts/reusable/new_experience_entry.py",
+            "backend/internal/service/remote_skill_seed/tree/scripts/reusable/pack_cloud_handoff.py",
+            "backend/internal/service/remote_skill_seed/tree/scripts/reusable/pe_entropy_triage.py",
+            "backend/internal/service/remote_skill_seed/tree/scripts/reusable/route_task.py",
+            "backend/internal/service/remote_skill_seed/tree/scripts/reusable/scaffold_project.py",
+            "backend/internal/service/remote_skill_seed/tree/scripts/validate_result.py",
+            "backend/internal/service/remote_skill_seed/tree/scripts/validate_skill.py",
+        ):
+            self.assertIn(f"diff --git a/{required} b/{required}".encode("utf-8"), patch_bytes)
+
+        # The remote-skill seed is a content-addressed bundle.  Keep the
+        # complete pinned tree in the replay so a fresh official checkout
+        # cannot fail later when Go embed validates the manifest.
+        remote_headers = [
+            line
+            for line in patch_bytes.splitlines()
+            if line.startswith(b"diff --git ")
+            and b"backend/internal/service/remote_skill_seed/" in line
+        ]
+        self.assertEqual(len(remote_headers), 459)
+        self.assertEqual(
+            sum(any(byte >= 0x80 for byte in line) for line in remote_headers),
+            47,
+        )
 
         overlay = json.loads(
             (root / "payload" / "ui" / "0.2.1" / "manifest.json").read_text(
