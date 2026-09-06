@@ -93,6 +93,10 @@ rm -f /opt/sub2api/.write-test
 把临时文件跨文件系统搬到状态目录。重新安装 2222 集成后，安装脚本会校验 apply
 单元的读写白名单并在不符合时自动回滚安装文件。
 
+融合版的远程技能种子在原生部署中使用
+`/var/lib/sub2api-weekly-overdraft/skill-registry`，由 systemd 通过
+`SUB2API_REMOTE_SKILL_REGISTRY_ROOT` 注入并持久化；不会写入容器专用的 `/app` 路径。
+
 ## 本地校验
 
 ```bash

@@ -12,7 +12,9 @@ STATE_DIR="${SUB2API_STATE_ROOT:-/var/lib/sub2api-weekly-overdraft}"
 ENV_FILE="${SUB2API_MANAGER_ENV:-/etc/sub2api/weekly-overdraft-manager.env}"
 DROPIN_DIR="/etc/systemd/system/sub2api.service.d"
 
-install -d -m 0750 -o sub2api -g sub2api "$PLUGIN_DIR" "$STATE_DIR"
+SKILL_REGISTRY_DIR="$STATE_DIR/skill-registry"
+
+install -d -m 0750 -o sub2api -g sub2api "$PLUGIN_DIR" "$STATE_DIR" "$SKILL_REGISTRY_DIR"
 cp -a "$SOURCE_DIR/." "$PLUGIN_DIR/"
 chmod 0750 "$PLUGIN_DIR"
 chmod 0750 "$PLUGIN_DIR/manager.sh" "$PLUGIN_DIR/manager.py" "$PLUGIN_DIR/auto_update.py" "$PLUGIN_DIR/release_monitor.py"

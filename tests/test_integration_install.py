@@ -74,6 +74,22 @@ class BackupPanelInstallAssetTests(unittest.TestCase):
         )
         self.assertIn('marks /opt/sub2api read-only', script)
 
+    def test_native_skill_registry_uses_persistent_state_namespace(self):
+        script = (ROOT / "systemd" / "install-plugin.sh").read_text(encoding="utf-8")
+        dropin = (ROOT / "systemd" / "weekly-overdraft-manager.conf").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('SKILL_REGISTRY_DIR="$STATE_DIR/skill-registry"', script)
+        self.assertIn('"$SKILL_REGISTRY_DIR"', script)
+        self.assertIn(
+            "Environment=SUB2API_REMOTE_SKILL_REGISTRY_ROOT=/var/lib/sub2api-weekly-overdraft/skill-registry",
+            dropin,
+        )
+        self.assertIn(
+            "ReadWritePaths=/opt/sub2api /var/lib/sub2api-weekly-overdraft /var/lib/sub2api-weekly-overdraft/skill-registry",
+            dropin,
+        )
+
     def test_installer_has_valid_bash_syntax(self):
         bash = shutil.which("bash")
         if not bash:
