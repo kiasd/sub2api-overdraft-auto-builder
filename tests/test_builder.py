@@ -243,7 +243,22 @@ class BuilderTests(unittest.TestCase):
         )
         self.assertEqual(
             sidebar["source_sha256"],
-            "78f7112f43a3a5f1d02634f797ea59373bd2f8f1b4fc62003b3bd149dc692664",
+            "38ed7dc6433d4ba15bb95c4b686b54189cdff00764540fa3b36e1d855e357c80",
+        )
+
+        replay5 = next(
+            entry
+            for entry in replay_manifest["replays"]
+            if entry["id"] == "codexrip-0.2.1.5"
+        )
+        self.assertEqual(replay5["source"]["repository"], "kiasd/sub2api-overdraft-auto-builder")
+        self.assertEqual(replay5["source"]["branch"], "fusion-proof-v0.2.1-codexrip.5")
+        self.assertEqual(replay5["source"]["version"], "0.2.1-codexrip.5")
+        self.assertEqual(replay5["source"]["commit"], "b53ea7ffc4faf11ed06fedafbb97fa538d8accb1")
+        self.assertEqual(replay5["overdraft_revision"], 5)
+        replay5_path = root / replay5["patch"]["path"]
+        self.assertEqual(
+            detect_updates.sha256_file(replay5_path), replay5["patch"]["sha256"]
         )
 
     def test_overlay_source_state_rejects_drift(self):

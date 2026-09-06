@@ -1,7 +1,7 @@
 {
-  "overlay_id": "anime-control-room-v1.3-htexplicit-021",
+  "overlay_id": "anime-control-room-v1.4-codexrip5-021",
   "target_version": "0.2.1",
-  "apply_after": "official-source-plus-htexplicit-codexrip-replay",
+  "apply_after": "official-source-plus-approved-codexrip-replay",
   "files": [
     {
       "path": "frontend/tailwind.config.js",
@@ -16,7 +16,7 @@
     {
       "path": "frontend/src/components/admin/account/AccountTableFilters.vue",
       "sha256": "05c4c70f2270e209758fbde1bd97d9c7993919db85196a3403b5ccb569cd9a84",
-      "source_sha256": "d11dc0ffd6ea4a2b053ce4bfa7842be49d44699a15282a8f2122bdb75be60584"
+      "source_sha256": "3906b6db023563296e0878bdabd2b5023ebac178a6de8a042b73e50d099c45fa"
     },
     {
       "path": "frontend/src/components/admin/account/__tests__/AccountTableToolbarLayout.spec.ts",
@@ -25,8 +25,8 @@
     },
     {
       "path": "frontend/src/components/user/dashboard/UserDashboardStats.vue",
-      "sha256": "ef188d96898d016f7867019465f7cbe8c910edbeca1267609f59a2018cc24c47",
-      "source_sha256": "bab85addb060d685e2b2525183606724f47395179faf4599ee5b7ff26acf424d"
+      "sha256": "3e488a151bf60308aedf5351918a7324b7b68831070664b5ae8e984dce269622",
+      "source_sha256": "73c55e8ed36ec1d81505fe295f5f26578a1f265d38649e7cf38813eb7c4d23eb"
     },
     {
       "path": "frontend/src/components/user/dashboard/__tests__/UserDashboardStatsResponsive.spec.ts",
@@ -35,18 +35,18 @@
     },
     {
       "path": "frontend/src/components/layout/AppLayout.vue",
-      "sha256": "e285b8e26cc03e618bdb865677ab6f9036e13182d7a66e3438cba668b335be8e",
-      "source_sha256": "0224607d8bece10c0584de8c19478856cabc54531c66da368b4513efaec827f5"
+      "sha256": "ec8143704171b4bf5e101572a17db010a28ea78b8a659e6dd942c7cda75246da",
+      "source_sha256": "b70d197cd962465baa3b063eaba12aef45ebbe61ebf2d0f28f249f43d45487fa"
     },
     {
       "path": "frontend/src/components/layout/AppHeader.vue",
-      "sha256": "718ac3387f501260da79fe3823605d389ff6717f2bb1d77f585fc606b3035174",
-      "source_sha256": "a4c78b8cc4f5c5750a876f93156aeb5519efbdbf51c2e386ba3ab7a3f3e2ddff"
+      "sha256": "4c850ffb1bafb681e68caca3ba92b7ab984a958f44c439fcbf339e97163def47",
+      "source_sha256": "0d9bbeff80ff9c899e632346a194f9fcfa2e55055fdc4a0c87149c143a7f9dad"
     },
     {
       "path": "frontend/src/components/layout/AppSidebar.vue",
-      "sha256": "ba168443e63248517c5dbb7c600384b0a8626709410e725cb6345b181cae3b6e",
-      "source_sha256": "78f7112f43a3a5f1d02634f797ea59373bd2f8f1b4fc62003b3bd149dc692664"
+      "sha256": "97a534d3a90080d4caee497918445b94ab513ff21383e1c557fcd8f69ace90a5",
+      "source_sha256": "38ed7dc6433d4ba15bb95c4b686b54189cdff00764540fa3b36e1d855e357c80"
     },
     {
       "path": "frontend/src/components/common/OfficialVersionBadge.vue",
