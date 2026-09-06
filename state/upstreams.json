@@ -26,7 +26,7 @@
       "source_version": "0.2.1",
       "target_version": "0.2.1"
     },
-    "published_at": "2026-09-06T04:41:46+00:00",
+    "published_at": "2026-09-06T04:49:00+00:00",
     "release_tag": "fusion-v0.2.1-codexrip.4-578785ee-57a697e7-uc2033274",
     "release_version": "0.2.1-codexrip.4",
     "replay": {
@@ -59,7 +59,7 @@
         "version": "0.2.1"
       }
     },
-    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/34011854935"
+    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/34012137457"
   },
   "schema": 1
 }
