@@ -1,15 +1,15 @@
 {
   "last_success": {
-    "fingerprint": "d2b3ead21a1108365424fe4be30193c453d66c5d200190b63d9384d2af8f8aea",
+    "fingerprint": "be477797826e50a88b40efe3075252af8ad064767ab768d1b3771956c0171ae2",
     "fork": {
       "base_commit": "578785ee7fb35030b094b69624efe25670a36f5f",
       "base_version": "0.2.1",
-      "branch": "main",
-      "commit": "57a697e7872e27a71a89606f1e599c89839c34b8",
+      "branch": "fusion-proof-v0.2.1-codexrip.6",
+      "commit": "d911014fc683988dbde7491184764cf4da1155ff",
       "flavor": "codexrip",
-      "repository": "HTExplicit/sub2api",
-      "url": "https://github.com/HTExplicit/sub2api/commit/57a697e7872e27a71a89606f1e599c89839c34b8",
-      "version": "0.2.1-codexrip.1"
+      "repository": "kiasd/sub2api-overdraft-auto-builder",
+      "url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/commit/d911014fc683988dbde7491184764cf4da1155ff",
+      "version": "0.2.1-codexrip.6"
     },
     "official": {
       "commit": "578785ee7fb35030b094b69624efe25670a36f5f",
@@ -21,37 +21,37 @@
     },
     "overlay": {
       "available": true,
-      "manifest_sha256": "bb83ec85799dcbb3aa47ba9f044206f07f05cdd927ec90b24e13713c078408eb",
+      "manifest_sha256": "51897b495667efa1e05a31af4c55ce8f7151a0c64a06f0b203dc3f7fa6e1121e",
       "mode": "exact",
       "source_version": "0.2.1",
       "target_version": "0.2.1"
     },
-    "published_at": "2026-09-06T04:49:00+00:00",
-    "release_tag": "fusion-v0.2.1-codexrip.4-578785ee-57a697e7-uc2033274",
-    "release_version": "0.2.1-codexrip.4",
+    "published_at": "2026-09-06T14:30:54+00:00",
+    "release_tag": "fusion-v0.2.1-codexrip.6-578785ee-d911014f-u4765983f",
+    "release_version": "0.2.1-codexrip.6",
     "replay": {
-      "entry_sha256": "b9edc5cce7bfd8a6c47fde29d45e9e1231722a698ba917d98e7afec32294baeb",
-      "id": "codexrip-0.2.1.4",
-      "manifest_sha256": "b8ec99c407b8d0e3d41f8b9d598ea6461a79a1242148ff1530870652065ad7ba",
+      "entry_sha256": "1a924026e73fc608e5253753039983876e456d74ad4972d6aff2e36ac8b18265",
+      "id": "codexrip-0.2.1.6",
+      "manifest_sha256": "5a639f7ca9f76af0bf45c5bc2a4477b4f8c3e9c04696eabd1099ca86d77c41d9",
       "mode": "approved-resolved-patch",
-      "overdraft_revision": 4,
+      "overdraft_revision": 6,
       "patch": {
-        "path": "payload/fork-replays/v0.2.1-codexrip.4.patch",
-        "sha256": "b24786b5df9d0af4f59042911d875acdcf7d085401f6b17ba1240a3b2a831eeb"
+        "path": "payload/fork-replays/v0.2.1-codexrip.6.patch",
+        "sha256": "fef2546e2017904107327636c27ba04c5a40be22e3eb94c6a376a961feba1581"
       },
       "source": {
         "base_commit": "578785ee7fb35030b094b69624efe25670a36f5f",
         "base_version": "0.2.1",
-        "branch": "main",
-        "commit": "57a697e7872e27a71a89606f1e599c89839c34b8",
+        "branch": "fusion-proof-v0.2.1-codexrip.6",
+        "commit": "d911014fc683988dbde7491184764cf4da1155ff",
         "excluded_paths": [
           ".github/workflows/production-deploy.yml",
           ".github/workflows/ssh-deploy-key-probe.yml",
           ".github/workflows/upstream-auto-deploy.yml"
         ],
-        "feature_diff_sha256": "b24786b5df9d0af4f59042911d875acdcf7d085401f6b17ba1240a3b2a831eeb",
-        "repository": "HTExplicit/sub2api",
-        "version": "0.2.1-codexrip.1"
+        "feature_diff_sha256": "fef2546e2017904107327636c27ba04c5a40be22e3eb94c6a376a961feba1581",
+        "repository": "kiasd/sub2api-overdraft-auto-builder",
+        "version": "0.2.1-codexrip.6"
       },
       "target": {
         "commit": "578785ee7fb35030b094b69624efe25670a36f5f",
@@ -59,7 +59,7 @@
         "version": "0.2.1"
       }
     },
-    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/34012137457"
+    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/34038983935"
   },
   "schema": 1
 }
