@@ -165,7 +165,7 @@ class BuilderTests(unittest.TestCase):
         replay = next(
             entry
             for entry in replay_manifest["replays"]
-            if entry["id"] == "codexrip-0.2.1.3"
+            if entry["id"] == "codexrip-0.2.1.4"
         )
         self.assertEqual(replay["target"]["version"], "0.2.1")
         self.assertEqual(
@@ -181,7 +181,7 @@ class BuilderTests(unittest.TestCase):
             replay["source"]["base_commit"],
             "578785ee7fb35030b094b69624efe25670a36f5f",
         )
-        self.assertEqual(replay["overdraft_revision"], 3)
+        self.assertEqual(replay["overdraft_revision"], 4)
         patch_path = root / replay["patch"]["path"]
         self.assertEqual(
             detect_updates.sha256_file(patch_path), replay["patch"]["sha256"]
