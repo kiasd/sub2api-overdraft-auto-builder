@@ -197,6 +197,26 @@ install_replacement root root 0644 \
   "$SOURCE_DIR/../systemd/sub2api-overdraft-apply-failed.service" "$APPLY_FAILED_UNIT"
 
 systemctl daemon-reload
+
+# Fail the installation if systemd did not grant the apply worker write access
+# to the native install directory.  Without this check the panel would report
+# a generic EROFS error only after a database backup had already started.
+apply_read_write_paths="$(systemctl show sub2api-overdraft-apply.service --property=ReadWritePaths --value)"
+case " $apply_read_write_paths " in
+  *" /opt/sub2api "*) ;;
+  *)
+    printf 'sub2api-overdraft-apply.service is missing ReadWritePaths=/opt/sub2api\n' >&2
+    exit 1
+    ;;
+esac
+apply_read_only_paths="$(systemctl show sub2api-overdraft-apply.service --property=ReadOnlyPaths --value)"
+case " $apply_read_only_paths " in
+  *" /opt/sub2api "*)
+    printf 'sub2api-overdraft-apply.service marks /opt/sub2api read-only\n' >&2
+    exit 1
+    ;;
+esac
+
 systemctl restart "$PANEL_SERVICE"
 panel_ready=0
 for _attempt in {1..30}; do

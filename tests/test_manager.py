@@ -1,6 +1,7 @@
 import importlib.util
 import io
 import json
+import errno
 import os
 import tarfile
 import tempfile
@@ -432,6 +433,44 @@ class ManagerTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"SUB2API_BINARY": str(target)}):
                 manager.atomic_replace_binary(source)
             self.assertEqual(target.read_bytes(), b"new-binary")
+
+    def test_atomic_replace_binary_cleans_random_temporary_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "candidate"
+            target = root / "install" / "sub2api"
+            source.write_bytes(b"new-binary")
+            target.parent.mkdir()
+            target.write_bytes(b"old-binary")
+            with mock.patch.dict(os.environ, {"SUB2API_BINARY": str(target)}):
+                manager.atomic_replace_binary(source)
+            self.assertEqual(list(target.parent.glob(".sub2api.*.new")), [])
+
+    def test_atomic_replace_binary_reports_read_only_install_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "candidate"
+            target = root / "install" / "sub2api"
+            source.write_bytes(b"new-binary")
+            target.parent.mkdir()
+            target.write_bytes(b"old-binary")
+            readonly = OSError(errno.EROFS, "Read-only file system")
+            with mock.patch.dict(os.environ, {"SUB2API_BINARY": str(target)}), \
+                mock.patch.object(manager.tempfile, "mkstemp", side_effect=readonly):
+                with self.assertRaisesRegex(manager.ManagerError, "文件系统为只读"):
+                    manager.atomic_replace_binary(source)
+            self.assertEqual(target.read_bytes(), b"old-binary")
+
+    def test_check_binary_write_returns_writable_status(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "install" / "sub2api"
+            target.parent.mkdir()
+            target.write_bytes(b"old-binary")
+            with mock.patch.dict(os.environ, {"SUB2API_BINARY": str(target)}):
+                result = manager.check_binary_write()
+            self.assertEqual(result["status"], "writable")
+            self.assertEqual(result["target"], str(target.resolve()))
 
     def test_program_backup_excludes_only_cache_and_atomic_temporary_files(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1106,6 +1145,70 @@ class ManagerTests(unittest.TestCase):
                     manager.read_json(state / "last-rollback.json", {})["status"],
                     "applied",
                 )
+
+    def test_apply_pending_does_not_restore_database_twice_after_swap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            backup_binary = state / "backups" / "backup" / "sub2api"
+            backup_binary.parent.mkdir(parents=True)
+            backup_binary.write_bytes(b"old-binary")
+            pending = {
+                "backup_id": "backup",
+                "target_version": "0.1.178",
+                "binary_backup": str(backup_binary),
+                "binary_sha256": manager.sha256_file(backup_binary),
+                "database_dump": str(state / "database.dump"),
+                "phase": "binary_restored_after_database",
+            }
+            with mock.patch.dict(os.environ, {"SUB2API_STATE_ROOT": temporary}):
+                manager.write_json_atomic(state / "pending-rollback.json", pending)
+                with mock.patch.object(manager, "restore_database") as restore, \
+                    mock.patch.object(manager, "atomic_replace_binary"):
+                    manager.apply_pending()
+                restore.assert_not_called()
+
+    def test_pg_identifier_rejects_unsafe_names(self):
+        with self.assertRaisesRegex(manager.ManagerError, "invalid PostgreSQL database name"):
+            manager.pg_identifier("sub2api; DROP DATABASE postgres")
+
+    def test_restore_database_builds_isolated_database_then_renames(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dump = Path(temporary) / "database.dump"
+            dump.write_bytes(b"dump")
+            with mock.patch.dict(
+                os.environ,
+                {"DATABASE_DBNAME": "sub2api", "PGDATABASE": "sub2api"},
+                clear=True,
+            ), mock.patch.object(manager, "run") as run:
+                manager.restore_database(dump)
+
+            self.assertGreaterEqual(run.call_count, 5)
+            createdb = run.call_args_list[0].args[0]
+            restored = run.call_args_list[1].args[0]
+            swapped = run.call_args_list[4].args[0]
+            temporary_name = str(createdb[1])
+            self.assertEqual(createdb[0], "createdb")
+            self.assertRegex(temporary_name, r"^sub2api_rollback_[0-9]+_[0-9]+$")
+            self.assertEqual(restored[0], "pg_restore")
+            self.assertNotIn("--clean", restored)
+            self.assertIn(temporary_name, restored)
+            self.assertEqual(swapped[0], "psql")
+            self.assertIn('ALTER DATABASE "sub2api_rollback_', swapped[-1])
+
+    def test_restore_database_can_restore_configured_database_owner_and_cleans_quarantine(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dump = Path(temporary) / "database.dump"
+            dump.write_bytes(b"dump")
+            with mock.patch.dict(
+                os.environ,
+                {"PGDATABASE": "sub2api", "PGDATABASE_OWNER": "sub2api"},
+                clear=False,
+            ), mock.patch.object(manager, "run") as run:
+                manager.restore_database(dump)
+
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertTrue(any("OWNER TO \"sub2api\"" in str(command[-1]) for command in commands if command[0] == "psql"))
+            self.assertTrue(any(command[0] == "dropdb" and "_old_" in str(command[-1]) for command in commands))
 
     def test_reconcile_marks_stale_inactive_apply_as_retryable_failure(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -155,6 +155,62 @@ class BuilderTests(unittest.TestCase):
         self.assertIn("...CONCRETE_PLATFORM_OPTIONS", filters)
         self.assertIn("xl:flex-nowrap", filters)
 
+    def test_021_replay_and_overlay_are_locked_to_verified_sources(self):
+        root = Path(__file__).resolve().parents[1]
+        replay_manifest = json.loads(
+            (root / "payload" / "fork-replays" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        replay = next(
+            entry
+            for entry in replay_manifest["replays"]
+            if entry["id"] == "codexrip-0.2.1.1"
+        )
+        self.assertEqual(replay["target"]["version"], "0.2.1")
+        self.assertEqual(
+            replay["target"]["commit"],
+            "578785ee7fb35030b094b69624efe25670a36f5f",
+        )
+        self.assertEqual(replay["source"]["version"], "0.2.1-codexrip.1")
+        self.assertEqual(
+            replay["source"]["commit"],
+            "57a697e7872e27a71a89606f1e599c89839c34b8",
+        )
+        self.assertEqual(
+            replay["source"]["base_commit"],
+            "578785ee7fb35030b094b69624efe25670a36f5f",
+        )
+        patch_path = root / replay["patch"]["path"]
+        self.assertEqual(
+            detect_updates.sha256_file(patch_path), replay["patch"]["sha256"]
+        )
+        self.assertEqual(
+            replay["source"]["feature_diff_sha256"], replay["patch"]["sha256"]
+        )
+        patch_bytes = patch_path.read_bytes()
+        for excluded in replay["source"]["excluded_paths"]:
+            self.assertNotIn(
+                f"diff --git a/{excluded} b/{excluded}".encode("utf-8"),
+                patch_bytes,
+            )
+
+        overlay = json.loads(
+            (root / "payload" / "ui" / "0.2.1" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(overlay["target_version"], "0.2.1")
+        sidebar = next(
+            entry
+            for entry in overlay["files"]
+            if entry["path"] == "frontend/src/components/layout/AppSidebar.vue"
+        )
+        self.assertEqual(
+            sidebar["source_sha256"],
+            "78f7112f43a3a5f1d02634f797ea59373bd2f8f1b4fc62003b3bd149dc692664",
+        )
+
     def test_overlay_source_state_rejects_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "frontend" / "source.ts"
@@ -247,6 +303,52 @@ class BuilderTests(unittest.TestCase):
             self.assertIn("lookupPath := entry.Path", rewritten)
             self.assertIn("declaredEmbedded := make(map[string]struct{}", rewritten)
             self.assertIn("if _, ok := declaredEmbedded[name]; !ok", rewritten)
+
+    def test_remote_skill_seed_adapts_the_021_tuple_loader_shape(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tree = root / "backend" / "internal" / "service" / "remote_skill_seed" / "tree" / "docs"
+            tree.mkdir(parents=True)
+            (tree / "u-认证.md").write_text("ok", encoding="utf-8")
+            seed = tree.parent.parent
+            (seed / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "files": [
+                            {
+                                "path": "docs/认证.md",
+                                "source_kind": "upstream",
+                                "byte_length": 2,
+                                "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            registry = root / "backend" / "internal" / "service" / "remote_skill_registry_manifest.go"
+            registry.write_text(
+                "\t\tcase \"upstream\":\n"
+                "\t\t\tupstreamCount++\n"
+                "\t\t\tif entry.EmbeddedPath != \"\" || entry.Provenance != nil {\n"
+                "\t\t\t\treturn fmt.Errorf(\"%w: upstream manifest entry has pinned metadata\", ErrBusinessSystemPromptBundleInvalid)\n"
+                "\t\t\t}\n"
+                "\t\t\tbody, ok = upstreamFiles[entry.Path]\n"
+                "\t}\n"
+                "\tfor name := range upstreamFiles {\n"
+                "\t\tif _, ok := files[name]; !ok {\n"
+                "\t\t\treturn remoteSkillManifest{}, nil, fmt.Errorf(\"%w: undeclared embedded upstream file\", ErrBusinessSystemPromptBundleInvalid)\n"
+                "\t\t}\n"
+                "\t}",
+                encoding="utf-8",
+            )
+
+            result = build_candidate.adapt_remote_skill_seed_for_go_embed(root)
+            self.assertEqual(result["remote_skill_embed_adaptation"], "ascii-physical-names")
+            rewritten = registry.read_text(encoding="utf-8")
+            self.assertIn("return remoteSkillManifest{}, nil, fmt.Errorf", rewritten)
+            self.assertIn("declaredEmbedded := make(map[string]struct{}", rewritten)
 
     def test_replay_base_is_fetched_from_the_full_shallow_clone(self):
         commands: list[list[str]] = []

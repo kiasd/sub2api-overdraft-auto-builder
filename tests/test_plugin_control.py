@@ -180,6 +180,10 @@ class PluginControlTests(unittest.TestCase):
     def test_apply_unit_has_unbounded_start_and_failure_convergence(self):
         self.assertIn("TimeoutStartSec=infinity", self.apply_unit)
         self.assertIn("TimeoutStopSec=180", self.apply_unit)
+        self.assertIn(
+            "ExecStartPre=/usr/local/sbin/sub2api-plugin-control check-binary-write",
+            self.apply_unit,
+        )
         self.assertIn("OnFailure=sub2api-overdraft-apply-failed.service", self.apply_unit)
         self.assertIn(
             "ExecStopPost=/usr/local/sbin/sub2api-plugin-control apply-worker-failed ${SERVICE_RESULT}",
@@ -197,6 +201,14 @@ class PluginControlTests(unittest.TestCase):
             self.control.index('[[ ! -x "$MANAGER" || ! -r "$ENV_FILE" ]]'),
         )
         self.assertIn("run_manager apply-worker-failed", worker_block)
+
+    def test_control_exposes_binary_write_preflight(self):
+        check = self.control[
+            self.control.index("  check-binary-write)") : self.control.index("  apply-worker-failed)")
+        ]
+        self.assertIn('[[ "$#" -eq 1 ]]', check)
+        self.assertIn("acquire_control_lock", check)
+        self.assertIn("run_manager check-binary-write", check)
 
 
 if __name__ == "__main__":

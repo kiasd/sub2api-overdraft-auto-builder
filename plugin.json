@@ -1,24 +1,25 @@
 {
   "id": "sub2api-overdraft-native-manager",
   "name": "Sub2API Official and Overdraft Native Update Manager",
-  "plugin_version": "2.4.0",
+  "plugin_version": "2.5.0",
   "official_repository": "Wei-Shaw/sub2api",
-  "official_release": "0.2.0",
+  "official_release": "0.2.1",
   "upstream_repository": "HTExplicit/sub2api",
   "builder_repository": "kiasd/sub2api-overdraft-auto-builder",
   "upstream_branch": "main",
-  "validated_upstream_version": "0.2.0",
-  "validated_fork_reference": "0.2.0-codexrip.4",
+  "validated_upstream_version": "0.2.1",
+  "validated_fork_reference": "0.2.1-codexrip.1",
   "validated_upstream_sources": {
-    "official-0.2.0": {
+    "official-0.2.1": {
       "repository": "Wei-Shaw/sub2api",
-      "commit": "aa236488351eb71e120fc2b6fb32e36b0374c918"
+      "commit": "578785ee7fb35030b094b69624efe25670a36f5f"
     },
-    "0.2.0-codexrip.4": {
+    "0.2.1-codexrip.1": {
       "repository": "HTExplicit/sub2api",
       "branch": "main",
-      "commit": "2315662ff5031942d45822bde9a9aec39181bf2c",
-      "embedded_version": "0.1.185"
+      "commit": "57a697e7872e27a71a89606f1e599c89839c34b8",
+      "base_commit": "578785ee7fb35030b094b69624efe25670a36f5f",
+      "embedded_version": "0.2.0"
     }
   },
   "update_strategy": "github-actions-build-plus-verified-release-monitor-and-manual-apply",

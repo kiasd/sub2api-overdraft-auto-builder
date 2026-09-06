@@ -7,6 +7,7 @@ OnFailure=sub2api-overdraft-apply-failed.service
 
 [Service]
 Type=oneshot
+ExecStartPre=/usr/local/sbin/sub2api-plugin-control check-binary-write
 ExecStart=/usr/local/sbin/sub2api-plugin-control apply-queued
 ExecStopPost=/usr/local/sbin/sub2api-plugin-control apply-worker-failed ${SERVICE_RESULT}
 TimeoutStartSec=infinity

@@ -40,6 +40,23 @@ install -m 0644 "$SOURCE_DIR/systemd/sub2api-overdraft-auto-update.timer" /etc/s
 install -m 0644 "$SOURCE_DIR/systemd/sub2api-overdraft-apply.service" /etc/systemd/system/sub2api-overdraft-apply.service
 install -m 0644 "$SOURCE_DIR/systemd/sub2api-overdraft-apply-failed.service" /etc/systemd/system/sub2api-overdraft-apply-failed.service
 systemctl daemon-reload
+
+apply_read_write_paths="$(systemctl show sub2api-overdraft-apply.service --property=ReadWritePaths --value)"
+case " $apply_read_write_paths " in
+  *" /opt/sub2api "*) ;;
+  *)
+    echo "sub2api-overdraft-apply.service lacks ReadWritePaths=/opt/sub2api" >&2
+    exit 1
+    ;;
+esac
+apply_read_only_paths="$(systemctl show sub2api-overdraft-apply.service --property=ReadOnlyPaths --value)"
+case " $apply_read_only_paths " in
+  *" /opt/sub2api "*)
+    echo "sub2api-overdraft-apply.service marks /opt/sub2api read-only" >&2
+    exit 1
+    ;;
+esac
+
 systemctl enable --now sub2api-overdraft-auto-update.timer
 
 echo "plugin files installed; verified Release monitor is enabled every 3-5 hours"

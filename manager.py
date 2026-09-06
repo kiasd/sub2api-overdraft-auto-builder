@@ -14,6 +14,7 @@ import argparse
 import base64
 import contextlib
 import datetime as dt
+import errno
 import hashlib
 import json
 import os
@@ -198,6 +199,62 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def assert_no_symbolic_link_components(path: Path, label: str) -> None:
+    """Reject a managed path when an existing component is a symlink.
+
+    The replacement operation runs with elevated service privileges.  Checking
+    every existing component before creating a temporary file prevents a
+    writable link from redirecting the operation outside the configured
+    installation tree.
+    """
+    if not path.is_absolute():
+        raise ManagerError(f"{label} must be an absolute path: {path}")
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        try:
+            entry = current.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ManagerError(f"cannot inspect {label}: {current}: {exc}") from exc
+        if stat.S_ISLNK(entry.st_mode):
+            raise ManagerError(f"{label} contains a symbolic-link component: {current}")
+
+
+def assert_regular_file(path: Path, label: str) -> os.stat_result:
+    """Require an existing regular file without following a symlink."""
+    try:
+        entry = path.lstat()
+    except FileNotFoundError as exc:
+        raise ManagerError(f"{label} does not exist: {path}") from exc
+    except OSError as exc:
+        raise ManagerError(f"cannot inspect {label}: {path}: {exc}") from exc
+    if stat.S_ISLNK(entry.st_mode):
+        raise ManagerError(f"{label} must not be a symbolic link: {path}")
+    if not stat.S_ISREG(entry.st_mode):
+        raise ManagerError(f"{label} must be a regular file: {path}")
+    return entry
+
+
+def _write_failure(path: Path, exc: OSError) -> ManagerError:
+    """Turn low-level mount/permission errors into an operator action."""
+    if exc.errno == errno.EROFS:
+        hint = (
+            "文件系统为只读；请先确认 `findmnt -T "
+            f"{path}` 为 rw，并检查 sub2api-overdraft-apply.service 的 "
+            "ReadWritePaths=/opt/sub2api"
+        )
+    elif exc.errno in {errno.EACCES, errno.EPERM}:
+        hint = (
+            "当前服务用户没有写权限；请检查 /opt/sub2api 的所有者/权限，"
+            "以及 apply unit 是否以正确用户运行"
+        )
+    else:
+        hint = "请检查安装目录、挂载状态和 systemd 应用单元"
+    return ManagerError(f"无法写入安装目录 {path}: {exc}；{hint}")
 
 
 def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -1287,6 +1344,19 @@ def dump_database(destination: Path) -> None:
     )
 
 
+PG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+
+def pg_identifier(value: str, label: str = "database name") -> str:
+    if not PG_IDENTIFIER_RE.fullmatch(value):
+        raise ManagerError(f"invalid PostgreSQL {label}: {value!r}")
+    return value
+
+
+def pg_quote_identifier(value: str, label: str = "database name") -> str:
+    return '"' + pg_identifier(value, label).replace('"', '""') + '"'
+
+
 def validate_database_clone(source: Path, dump_path: Path) -> None:
     environment = pg_environment()
     clone = f"{environment['PGDATABASE']}_patchcheck_{int(time.time())}_{os.getpid()}"
@@ -1403,21 +1473,117 @@ def finalize_database_backup(directory: Path, metadata: dict[str, Any]) -> None:
 
 
 def atomic_replace_binary(source: Path) -> None:
+    source = Path(source).expanduser()
+    if not source.is_absolute():
+        raise ManagerError(f"replacement binary must be an absolute path: {source}")
+    if ".." in source.parts:
+        raise ManagerError(
+            f"replacement binary must not contain parent-directory traversal: {source}"
+        )
+    # abspath normalizes `.` without resolving symlinks; the component checks
+    # below must see the actual directory entries.
+    source = Path(os.path.abspath(os.fspath(source)))
+    assert_no_symbolic_link_components(source, "replacement binary")
+    assert_regular_file(source, "replacement binary")
+
     target = binary_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f".{target.name}.{os.getpid()}.new")
-    shutil.copy2(source, temporary)
-    temporary.chmod(0o750)
+    target_stat = assert_regular_file(target, "installed binary")
+    parent = target.parent
+    assert_no_symbolic_link_components(parent, "installation directory")
+    try:
+        parent_stat = parent.lstat()
+    except FileNotFoundError as exc:
+        raise ManagerError(f"installation directory does not exist: {parent}") from exc
+    except OSError as exc:
+        raise ManagerError(f"cannot inspect installation directory: {parent}: {exc}") from exc
+    if stat.S_ISLNK(parent_stat.st_mode) or not stat.S_ISDIR(parent_stat.st_mode):
+        raise ManagerError(f"installation directory must be a regular directory: {parent}")
+
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.{os.getpid()}.", suffix=".new", dir=parent
+        )
+    except OSError as exc:
+        raise _write_failure(parent, exc) from exc
+
+    temporary = Path(temporary_name)
+    source_descriptor = -1
+    try:
+        source_flags = os.O_RDONLY
+        if os.name != "nt" and hasattr(os, "O_NOFOLLOW"):
+            source_flags |= os.O_NOFOLLOW
+        try:
+            source_descriptor = os.open(source, source_flags)
+        except OSError as exc:
+            raise ManagerError(f"cannot safely open replacement binary: {source}: {exc}") from exc
+        source_stat = os.fstat(source_descriptor)
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise ManagerError(f"replacement binary must be a regular file: {source}")
+        with os.fdopen(source_descriptor, "rb") as input_handle:
+            source_descriptor = -1
+            with os.fdopen(descriptor, "wb") as output_handle:
+                descriptor = -1
+                shutil.copyfileobj(input_handle, output_handle, length=1024 * 1024)
+                output_handle.flush()
+                if os.name != "nt":
+                    os.fsync(output_handle.fileno())
+        temporary.chmod(0o750)
+        # Preserve the installed executable's ownership when the apply worker
+        # is privileged.  A non-root worker cannot chown, so retain the
+        # ownership inherited from the temporary file in that case.
+        if os.name != "nt" and os.geteuid() == 0:
+            if target_stat.st_uid != os.geteuid() or target_stat.st_gid != os.getegid():
+                os.chown(temporary, target_stat.st_uid, target_stat.st_gid)
+        try:
+            os.replace(temporary, target)
+        except OSError as exc:
+            raise _write_failure(target, exc) from exc
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if descriptor >= 0:
+            os.close(descriptor)
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
+
     if os.name != "nt":
-        with temporary.open("rb") as handle:
-            os.fsync(handle.fileno())
-    os.replace(temporary, target)
-    if os.name != "nt":
-        directory_fd = os.open(target.parent, os.O_RDONLY)
+        try:
+            directory_fd = os.open(parent, os.O_RDONLY)
+        except OSError as exc:
+            raise _write_failure(parent, exc) from exc
         try:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
+
+
+def check_binary_write() -> dict[str, Any]:
+    """Verify that the apply service can create a sibling temporary file.
+
+    This command is run as an ``ExecStartPre`` check, before any database
+    restore or program backup is changed.  It deliberately does not attempt
+    to remount a read-only filesystem; the operator must fix that condition.
+    """
+    target = binary_path()
+    assert_regular_file(target, "installed binary")
+    parent = target.parent
+    assert_no_symbolic_link_components(parent, "installation directory")
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.{os.getpid()}.probe.", dir=parent
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(b"probe")
+            handle.flush()
+            if os.name != "nt":
+                os.fsync(handle.fileno())
+    except OSError as exc:
+        raise _write_failure(parent, exc) from exc
+    finally:
+        if "temporary_name" in locals():
+            with contextlib.suppress(FileNotFoundError):
+                Path(temporary_name).unlink()
+    return {"status": "writable", "target": str(target), "directory": str(parent)}
 
 
 def patch_state_path(version: str, channel: str | None = None) -> Path:
@@ -1647,21 +1813,83 @@ def restore_database(dump_path: Path) -> None:
     if not dump_path.is_file():
         raise ManagerError(f"database backup does not exist: {dump_path}")
     environment = pg_environment()
-    run(
-        [
-            "pg_restore",
-            "--clean",
-            "--if-exists",
-            "--exit-on-error",
-            "--no-owner",
-            "--no-privileges",
-            "--dbname",
-            environment["PGDATABASE"],
-            dump_path,
-        ],
-        env=environment,
-        timeout=3600,
-    )
+    target = pg_identifier(environment["PGDATABASE"])
+    suffix = f"_rollback_{os.getpid()}_{time.time_ns() % 10**12}"
+    temporary = pg_identifier((target[: 63 - len(suffix)] + suffix).strip("_"))
+    quarantine_suffix = f"_old_{os.getpid()}_{time.time_ns() % 10**12}"
+    quarantine = pg_identifier((target[: 63 - len(quarantine_suffix)] + quarantine_suffix).strip("_"))
+    maintenance_database = pg_identifier(os.environ.get("PGMAINTENANCE_DB", "postgres"))
+    admin = pg_environment(maintenance_database)
+    # An application role often owns its database but is not allowed to create
+    # or rename databases.  Permit an explicitly configured maintenance role,
+    # while retaining the existing DATABASE_* credentials as the default.
+    maintenance_user = os.environ.get("PGMAINTENANCE_USER", "").strip()
+    maintenance_password = os.environ.get("PGMAINTENANCE_PASSWORD", "")
+    if maintenance_user:
+        admin["PGUSER"] = maintenance_user
+        admin["DATABASE_USER"] = maintenance_user
+    if maintenance_password:
+        admin["PGPASSWORD"] = maintenance_password
+        admin["DATABASE_PASSWORD"] = maintenance_password
+    try:
+        run(["createdb", temporary], env=admin, timeout=300)
+        restore_environment = pg_environment(temporary)
+        run(
+            [
+                "pg_restore",
+                "--exit-on-error",
+                "--no-owner",
+                "--no-privileges",
+                "--dbname",
+                temporary,
+                dump_path,
+            ],
+            env=restore_environment,
+            timeout=3600,
+        )
+        psql = ["psql", "--dbname", maintenance_database, "-v", "ON_ERROR_STOP=1", "-c"]
+        run(
+            psql + [
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                f"WHERE datname = {target!r} AND pid <> pg_backend_pid();"
+            ],
+            env=admin,
+            timeout=300,
+        )
+        run(
+            psql + [f"ALTER DATABASE {pg_quote_identifier(target)} RENAME TO {pg_quote_identifier(quarantine)};"],
+            env=admin,
+            timeout=300,
+        )
+        try:
+            run(
+                psql + [f"ALTER DATABASE {pg_quote_identifier(temporary)} RENAME TO {pg_quote_identifier(target)};"],
+                env=admin,
+                timeout=300,
+            )
+            owner = os.environ.get("PGDATABASE_OWNER", "").strip()
+            if owner:
+                run(
+                    psql + [f"ALTER DATABASE {pg_quote_identifier(target)} OWNER TO {pg_quote_identifier(owner, 'database owner')};"],
+                    env=admin,
+                    timeout=300,
+                )
+            # The old database is disposable; cleanup failure must not undo a
+            # successful cutover or make a retry restore over the live target.
+            with contextlib.suppress(Exception):
+                run(["dropdb", "--if-exists", "--force", quarantine], env=admin, timeout=300)
+        except Exception:
+            with contextlib.suppress(Exception):
+                run(
+                    psql + [f"ALTER DATABASE {pg_quote_identifier(quarantine)} RENAME TO {pg_quote_identifier(target)};"],
+                    env=admin,
+                    timeout=300,
+                )
+            raise
+    except Exception:
+        with contextlib.suppress(Exception):
+            run(["dropdb", "--if-exists", "--force", temporary], env=admin, timeout=300)
+        raise
 
 
 def apply_pending() -> dict[str, Any]:
@@ -1670,6 +1898,7 @@ def apply_pending() -> dict[str, Any]:
     if not pending:
         return {"status": "nothing_pending"}
     backup_binary_value = str(pending.get("binary_backup", ""))
+    backup_binary: Path | None = None
     if backup_binary_value:
         backup_binary = Path(backup_binary_value)
         expected_hash = str(pending.get("binary_sha256", ""))
@@ -1677,10 +1906,14 @@ def apply_pending() -> dict[str, Any]:
             raise ManagerError(f"rollback binary does not exist: {backup_binary}")
         if expected_hash and sha256_file(backup_binary) != expected_hash:
             raise ManagerError(f"rollback binary checksum mismatch: {backup_binary}")
-        atomic_replace_binary(backup_binary)
-        pending["phase"] = "binary_restored"
+    if pending.get("phase") not in {"database_swapped", "binary_restored_after_database"}:
+        restore_database(Path(str(pending["database_dump"])))
+        pending["phase"] = "database_swapped"
         write_json_atomic(pending_path, pending)
-    restore_database(Path(str(pending["database_dump"])))
+    if backup_binary is not None:
+        atomic_replace_binary(backup_binary)
+        pending["phase"] = "binary_restored_after_database"
+        write_json_atomic(pending_path, pending)
     pending["status"] = "applied"
     pending["applied_at"] = now_utc()
     write_json_atomic(state_root() / "last-rollback.json", pending)
@@ -2675,6 +2908,7 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser("auto-run")
     subparsers.add_parser("auto-finish")
     subparsers.add_parser("auto-apply-restart")
+    subparsers.add_parser("check-binary-write")
     subparsers.add_parser("apply-start-failed")
     worker_failed_parser = subparsers.add_parser("apply-worker-failed")
     worker_failed_parser.add_argument("reason", nargs="?", default="后台应用任务异常停止")
@@ -2725,6 +2959,8 @@ def main() -> int:
                 return auto_finish()
             elif args.command == "auto-apply-restart":
                 return auto_apply_restart()
+            elif args.command == "check-binary-write":
+                return check_binary_write()
             elif args.command == "apply-start-failed":
                 return apply_start_failed()
             elif args.command == "apply-worker-failed":

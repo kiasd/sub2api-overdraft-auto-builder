@@ -27,6 +27,33 @@
         "sha256": "858ed920694f8aa9469adb0cad166226f582a4b49a86081eb37df259962fbed1"
       },
       "overdraft_revision": 4
+    },
+    {
+      "id": "codexrip-0.2.1.1",
+      "target": {
+        "repository": "Wei-Shaw/sub2api",
+        "version": "0.2.1",
+        "commit": "578785ee7fb35030b094b69624efe25670a36f5f"
+      },
+      "source": {
+        "repository": "HTExplicit/sub2api",
+        "branch": "main",
+        "version": "0.2.1-codexrip.1",
+        "commit": "57a697e7872e27a71a89606f1e599c89839c34b8",
+        "base_version": "0.2.1",
+        "base_commit": "578785ee7fb35030b094b69624efe25670a36f5f",
+        "feature_diff_sha256": "6e86e594c62303a0936c9bef17584f5d95525f3d5d78078494c36482d5f0e1e6",
+        "excluded_paths": [
+          ".github/workflows/production-deploy.yml",
+          ".github/workflows/ssh-deploy-key-probe.yml",
+          ".github/workflows/upstream-auto-deploy.yml"
+        ]
+      },
+      "patch": {
+        "path": "payload/fork-replays/v0.2.1-codexrip.1.patch",
+        "sha256": "6e86e594c62303a0936c9bef17584f5d95525f3d5d78078494c36482d5f0e1e6"
+      },
+      "overdraft_revision": 1
     }
   ]
 }

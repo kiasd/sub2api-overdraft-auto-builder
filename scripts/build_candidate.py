@@ -143,12 +143,21 @@ def adapt_remote_skill_seed_for_go_embed(source: Path) -> dict[str, Any]:
 \t\t\t\tlookupPath = strings.TrimPrefix(entry.EmbeddedPath, \"tree/\")
 \t\t\t}
 \t\t\tbody, ok = upstreamFiles[lookupPath]"""
-    old_undeclared = """\tfor name := range upstreamFiles {
+    # The 0.2.1 replay returns a three-value tuple from this loader, whereas
+    # earlier revisions returned only an error.  Keep both exact shapes here;
+    # silently applying only part of the portability adaptation would produce a
+    # candidate whose manifest and embedded tree disagree.
+    old_undeclared_error = """\tfor name := range upstreamFiles {
 \t\tif _, ok := files[name]; !ok {
 \t\t\treturn fmt.Errorf(\"%w: undeclared embedded upstream file\", ErrBusinessSystemPromptBundleInvalid)
 \t\t}
 \t}"""
-    new_undeclared = """\tdeclaredEmbedded := make(map[string]struct{}, len(manifest.Files))
+    old_undeclared_tuple = """\tfor name := range upstreamFiles {
+\t\tif _, ok := files[name]; !ok {
+\t\t\treturn remoteSkillManifest{}, nil, fmt.Errorf(\"%w: undeclared embedded upstream file\", ErrBusinessSystemPromptBundleInvalid)
+\t\t}
+\t}"""
+    new_undeclared_error = """\tdeclaredEmbedded := make(map[string]struct{}, len(manifest.Files))
 \tfor _, entry := range manifest.Files {
 \t\tif entry.SourceKind != \"upstream\" {
 \t\t\tcontinue
@@ -164,8 +173,20 @@ def adapt_remote_skill_seed_for_go_embed(source: Path) -> dict[str, Any]:
 \t\t\treturn fmt.Errorf(\"%w: undeclared embedded upstream file\", ErrBusinessSystemPromptBundleInvalid)
 \t\t}
 \t}"""
-    if old_validation not in registry or old_lookup not in registry or old_undeclared not in registry:
+    new_undeclared_tuple = new_undeclared_error.replace(
+        "return fmt.Errorf(\"%w: undeclared embedded upstream file\", ErrBusinessSystemPromptBundleInvalid)",
+        "return remoteSkillManifest{}, nil, fmt.Errorf(\"%w: undeclared embedded upstream file\", ErrBusinessSystemPromptBundleInvalid)",
+    )
+    undeclared_shape = (
+        (old_undeclared_tuple, new_undeclared_tuple)
+        if old_undeclared_tuple in registry
+        else (old_undeclared_error, new_undeclared_error)
+        if old_undeclared_error in registry
+        else None
+    )
+    if old_validation not in registry or old_lookup not in registry or undeclared_shape is None:
         raise BuildError("remote skill loader shape changed; portability adaptation needs review")
+    old_undeclared, new_undeclared = undeclared_shape
     registry = (
         registry.replace(old_validation, new_validation, 1)
         .replace(old_lookup, new_lookup, 1)

@@ -161,6 +161,11 @@ case "$action" in
     restart_with_fallback yes
     run_manager auto-finish
     ;;
+  check-binary-write)
+    [[ "$#" -eq 1 ]]
+    acquire_control_lock
+    run_manager check-binary-write
+    ;;
   apply-worker-failed)
     [[ "$#" -ge 1 && "$#" -le 2 ]]
     acquire_control_lock

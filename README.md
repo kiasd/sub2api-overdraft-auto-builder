@@ -35,8 +35,8 @@
 
 - [auto-build.yml](.github/workflows/auto-build.yml) 每 4 小时检测一次，也支持手动强制构建。
 - [validate.yml](.github/workflows/validate.yml) 校验 Python、UI 清单、密钥泄露和单元测试。
-- 官方 `v0.2.0` 与 HTExplicit 的合并基线一致时，重放锁定的 codexrip 变更。
-- 当前 `v0.2.0-codexrip.4` 重放明确排除 HTExplicit 临时的
+- 官方 `v0.2.1` 与 HTExplicit 的合并基线一致时，重放锁定的 codexrip 变更。
+- 当前 `v0.2.1-codexrip.1` 重放明确排除 HTExplicit 临时的
   `.github/workflows/ssh-deploy-key-probe.yml`；该工作流会读取生产环境 SSH
   密钥并连接目标主机，不属于本自用包。排除项会写入 `build-metadata.json`，检测器
   也会拒绝包含该路径的补丁。
@@ -72,6 +72,22 @@ Actions 负责跟踪两个上游、融合、测试和发布，不会连接生产
 5. 下载并复核候选二进制的大小与 SHA-256，随后等待人工应用。
 
 2222 面板不拉取两个上游源码，也不运行 Go、Node 或 pnpm。只有用户点击“应用已验证版本”后，服务器才全量备份程序、配置和 PostgreSQL，然后原子切换、重启并执行健康检查；失败时恢复旧程序和数据库。构建失败只在面板显示告警和 Actions 链接，当前服务保持不变。
+
+应用单元在真正开始备份前会以与替换操作相同的服务用户执行写入预检
+（`check-binary-write`）。如果 `/opt/sub2api` 是只读挂载，或 systemd 单元没有
+`ReadWritePaths=/opt/sub2api`，任务会立即失败并保留旧程序和数据库，不会留下
+`.sub2api.*.new` 残留文件。此时先在服务器执行以下只读检查，再重新安装本集成：
+
+```bash
+systemctl show sub2api-overdraft-apply.service -p ProtectSystem -p ReadWritePaths -p ReadOnlyPaths
+findmnt -T /opt/sub2api -o TARGET,FSTYPE,OPTIONS
+sudo -u sub2api touch /opt/sub2api/.write-test
+rm -f /opt/sub2api/.write-test
+```
+
+`findmnt` 若显示 `ro`，必须先恢复可写挂载；应用逻辑不会尝试偷偷 remount，也不会
+把临时文件跨文件系统搬到状态目录。重新安装 2222 集成后，安装脚本会校验 apply
+单元的读写白名单并在不符合时自动回滚安装文件。
 
 ## 本地校验
 

@@ -61,6 +61,19 @@ class BackupPanelInstallAssetTests(unittest.TestCase):
         unhealthy_branch = script.split('if [[ "$panel_ready" -ne 1 ]]', 1)[1]
         self.assertIn("exit 1", unhealthy_branch)
 
+    def test_installer_verifies_apply_unit_write_namespace(self):
+        script = INSTALLER.read_text(encoding="utf-8")
+        self.assertIn(
+            'systemctl show sub2api-overdraft-apply.service --property=ReadWritePaths --value',
+            script,
+        )
+        self.assertIn('ReadWritePaths=/opt/sub2api', script)
+        self.assertIn(
+            'systemctl show sub2api-overdraft-apply.service --property=ReadOnlyPaths --value',
+            script,
+        )
+        self.assertIn('marks /opt/sub2api read-only', script)
+
     def test_installer_has_valid_bash_syntax(self):
         bash = shutil.which("bash")
         if not bash:
