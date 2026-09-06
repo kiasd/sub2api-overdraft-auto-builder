@@ -1,65 +1,65 @@
 {
   "last_success": {
-    "fingerprint": "75853acf1f8c6566ab1d53755bcb39c814018cba9c0b6018553202ba253ae7ef",
+    "fingerprint": "d2b3ead21a1108365424fe4be30193c453d66c5d200190b63d9384d2af8f8aea",
     "fork": {
-      "base_commit": "aa236488351eb71e120fc2b6fb32e36b0374c918",
-      "base_version": "0.2.0",
+      "base_commit": "578785ee7fb35030b094b69624efe25670a36f5f",
+      "base_version": "0.2.1",
       "branch": "main",
-      "commit": "e6a99b21dbdf7c1dd11e89e3a14608929fa95174",
+      "commit": "57a697e7872e27a71a89606f1e599c89839c34b8",
       "flavor": "codexrip",
       "repository": "HTExplicit/sub2api",
-      "url": "https://github.com/HTExplicit/sub2api/commit/e6a99b21dbdf7c1dd11e89e3a14608929fa95174",
-      "version": "0.2.0-codexrip.4"
+      "url": "https://github.com/HTExplicit/sub2api/commit/57a697e7872e27a71a89606f1e599c89839c34b8",
+      "version": "0.2.1-codexrip.1"
     },
     "official": {
-      "commit": "aa236488351eb71e120fc2b6fb32e36b0374c918",
-      "published_at": "2026-09-02T03:24:41Z",
+      "commit": "578785ee7fb35030b094b69624efe25670a36f5f",
+      "published_at": "2026-09-05T09:45:01Z",
       "repository": "Wei-Shaw/sub2api",
-      "tag": "v0.2.0",
-      "url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.2.0",
-      "version": "0.2.0"
+      "tag": "v0.2.1",
+      "url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.2.1",
+      "version": "0.2.1"
     },
     "overlay": {
       "available": true,
-      "manifest_sha256": "f40f8ba0fbaf12fcec7bf7387816391772e0463d3d49f5ca59041af272cfc581",
+      "manifest_sha256": "bb83ec85799dcbb3aa47ba9f044206f07f05cdd927ec90b24e13713c078408eb",
       "mode": "exact",
-      "source_version": "0.2.0",
-      "target_version": "0.2.0"
+      "source_version": "0.2.1",
+      "target_version": "0.2.1"
     },
-    "published_at": "2026-09-04T12:37:04+00:00",
-    "release_tag": "fusion-v0.2.0-codexrip.4-aa236488-e6a99b21-ub7c3ddd7",
-    "release_version": "0.2.0-codexrip.4",
+    "published_at": "2026-09-06T04:41:46+00:00",
+    "release_tag": "fusion-v0.2.1-codexrip.4-578785ee-57a697e7-uc2033274",
+    "release_version": "0.2.1-codexrip.4",
     "replay": {
-      "entry_sha256": "af1fcebbed90b723d9c1a6ccbf7d065b1b8c09574803b1b3f87fe7dca13a90fd",
-      "id": "codexrip-0.2.0.4",
-      "manifest_sha256": "05a3585663500c8478dbefed9c5adfaafb7328008c08446b9aff6c4ae8e3bbf3",
+      "entry_sha256": "b9edc5cce7bfd8a6c47fde29d45e9e1231722a698ba917d98e7afec32294baeb",
+      "id": "codexrip-0.2.1.4",
+      "manifest_sha256": "b8ec99c407b8d0e3d41f8b9d598ea6461a79a1242148ff1530870652065ad7ba",
       "mode": "approved-resolved-patch",
       "overdraft_revision": 4,
       "patch": {
-        "path": "payload/fork-replays/v0.2.0-codexrip-latest.patch",
-        "sha256": "858ed920694f8aa9469adb0cad166226f582a4b49a86081eb37df259962fbed1"
+        "path": "payload/fork-replays/v0.2.1-codexrip.4.patch",
+        "sha256": "b24786b5df9d0af4f59042911d875acdcf7d085401f6b17ba1240a3b2a831eeb"
       },
       "source": {
-        "base_commit": "aa236488351eb71e120fc2b6fb32e36b0374c918",
-        "base_version": "0.2.0",
+        "base_commit": "578785ee7fb35030b094b69624efe25670a36f5f",
+        "base_version": "0.2.1",
         "branch": "main",
-        "commit": "e6a99b21dbdf7c1dd11e89e3a14608929fa95174",
+        "commit": "57a697e7872e27a71a89606f1e599c89839c34b8",
         "excluded_paths": [
           ".github/workflows/production-deploy.yml",
           ".github/workflows/ssh-deploy-key-probe.yml",
           ".github/workflows/upstream-auto-deploy.yml"
         ],
-        "feature_diff_sha256": "858ed920694f8aa9469adb0cad166226f582a4b49a86081eb37df259962fbed1",
+        "feature_diff_sha256": "b24786b5df9d0af4f59042911d875acdcf7d085401f6b17ba1240a3b2a831eeb",
         "repository": "HTExplicit/sub2api",
-        "version": "0.2.0-codexrip.4"
+        "version": "0.2.1-codexrip.1"
       },
       "target": {
-        "commit": "aa236488351eb71e120fc2b6fb32e36b0374c918",
+        "commit": "578785ee7fb35030b094b69624efe25670a36f5f",
         "repository": "Wei-Shaw/sub2api",
-        "version": "0.2.0"
+        "version": "0.2.1"
       }
     },
-    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/33873049623"
+    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/34011854935"
   },
   "schema": 1
 }
