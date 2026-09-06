@@ -246,19 +246,19 @@ class BuilderTests(unittest.TestCase):
             "38ed7dc6433d4ba15bb95c4b686b54189cdff00764540fa3b36e1d855e357c80",
         )
 
-        replay5 = next(
+        replay6 = next(
             entry
             for entry in replay_manifest["replays"]
-            if entry["id"] == "codexrip-0.2.1.5"
+            if entry["id"] == "codexrip-0.2.1.6"
         )
-        self.assertEqual(replay5["source"]["repository"], "kiasd/sub2api-overdraft-auto-builder")
-        self.assertEqual(replay5["source"]["branch"], "fusion-proof-v0.2.1-codexrip.5")
-        self.assertEqual(replay5["source"]["version"], "0.2.1-codexrip.5")
-        self.assertEqual(replay5["source"]["commit"], "b53ea7ffc4faf11ed06fedafbb97fa538d8accb1")
-        self.assertEqual(replay5["overdraft_revision"], 5)
-        replay5_path = root / replay5["patch"]["path"]
+        self.assertEqual(replay6["source"]["repository"], "kiasd/sub2api-overdraft-auto-builder")
+        self.assertEqual(replay6["source"]["branch"], "fusion-proof-v0.2.1-codexrip.6")
+        self.assertEqual(replay6["source"]["version"], "0.2.1-codexrip.6")
+        self.assertEqual(replay6["source"]["commit"], "d911014fc683988dbde7491184764cf4da1155ff")
+        self.assertEqual(replay6["overdraft_revision"], 6)
+        replay6_path = root / replay6["patch"]["path"]
         self.assertEqual(
-            detect_updates.sha256_file(replay5_path), replay5["patch"]["sha256"]
+            detect_updates.sha256_file(replay6_path), replay6["patch"]["sha256"]
         )
 
     def test_overlay_source_state_rejects_drift(self):

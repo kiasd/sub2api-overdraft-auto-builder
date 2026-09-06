@@ -20,7 +20,7 @@ OFFICIAL_REPOSITORY = os.environ.get("SUB2API_OFFICIAL_REPOSITORY", "Wei-Shaw/su
 FORK_REPOSITORY = os.environ.get(
     "SUB2API_FORK_REPOSITORY", "kiasd/sub2api-overdraft-auto-builder"
 )
-FORK_BRANCH = os.environ.get("SUB2API_FORK_BRANCH", "fusion-proof-v0.2.1-codexrip.5")
+FORK_BRANCH = os.environ.get("SUB2API_FORK_BRANCH", "fusion-proof-v0.2.1-codexrip.6")
 API_ROOT = "https://api.github.com"
 VERSION_RE = re.compile(r"^v?(\d+\.\d+\.\d+)$")
 FORK_VERSION_RE = re.compile(r"^(\d+\.\d+\.\d+)-(overdraft|custom|codexrip)\.(\d+)$")
