@@ -1129,7 +1129,7 @@ class ManagerTests(unittest.TestCase):
                     result = manager.apply_pending()
 
                 self.assertEqual(result, {"status": "rollback_applied", "version": "0.1.178"})
-                restore.assert_called_once_with(dump)
+                restore.assert_called_once_with(dump, clear_state=False)
                 replace.assert_called_once_with(backup_binary)
                 status = manager.auto_update_status()
                 self.assertEqual(status["status"], "rolled_back")
@@ -1173,42 +1173,188 @@ class ManagerTests(unittest.TestCase):
 
     def test_restore_database_builds_isolated_database_then_renames(self):
         with tempfile.TemporaryDirectory() as temporary:
-            dump = Path(temporary) / "database.dump"
+            root = Path(temporary)
+            dump = root / "database.dump"
             dump.write_bytes(b"dump")
             with mock.patch.dict(
                 os.environ,
-                {"DATABASE_DBNAME": "sub2api", "PGDATABASE": "sub2api"},
+                {
+                    "SUB2API_STATE_ROOT": str(root / "state"),
+                    "DATABASE_DBNAME": "sub2api",
+                    "PGDATABASE": "sub2api",
+                },
                 clear=True,
             ), mock.patch.object(manager, "run") as run:
                 manager.restore_database(dump)
 
             self.assertGreaterEqual(run.call_count, 5)
-            createdb = run.call_args_list[0].args[0]
-            restored = run.call_args_list[1].args[0]
-            swapped = run.call_args_list[4].args[0]
-            temporary_name = str(createdb[1])
+            commands = [call.args[0] for call in run.call_args_list]
+            createdb = next(command for command in commands if command[0] == "createdb")
+            restored = next(command for command in commands if command[0] == "pg_restore")
+            swapped = next(
+                command
+                for command in commands
+                if command[0] == "psql" and 'RENAME TO "sub2api"' in str(command[-1])
+            )
+            temporary_name = str(createdb[-1])
             self.assertEqual(createdb[0], "createdb")
+            self.assertEqual(createdb[1:3], ["--owner", "sub2api"])
             self.assertRegex(temporary_name, r"^sub2api_rollback_[0-9]+_[0-9]+$")
             self.assertEqual(restored[0], "pg_restore")
             self.assertNotIn("--clean", restored)
             self.assertIn(temporary_name, restored)
             self.assertEqual(swapped[0], "psql")
-            self.assertIn('ALTER DATABASE "sub2api_rollback_', swapped[-1])
+            self.assertIn(f'ALTER DATABASE "{temporary_name}" RENAME TO "sub2api"', swapped[-1])
 
     def test_restore_database_can_restore_configured_database_owner_and_cleans_quarantine(self):
         with tempfile.TemporaryDirectory() as temporary:
-            dump = Path(temporary) / "database.dump"
+            root = Path(temporary)
+            dump = root / "database.dump"
             dump.write_bytes(b"dump")
             with mock.patch.dict(
                 os.environ,
-                {"PGDATABASE": "sub2api", "PGDATABASE_OWNER": "sub2api"},
+                {
+                    "SUB2API_STATE_ROOT": str(root / "state"),
+                    "PGDATABASE": "sub2api",
+                    "PGDATABASE_OWNER": "dbowner",
+                },
                 clear=False,
             ), mock.patch.object(manager, "run") as run:
                 manager.restore_database(dump)
 
             commands = [call.args[0] for call in run.call_args_list]
-            self.assertTrue(any("OWNER TO \"sub2api\"" in str(command[-1]) for command in commands if command[0] == "psql"))
+            self.assertTrue(any("OWNER TO \"dbowner\"" in str(command[-1]) for command in commands if command[0] == "psql"))
             self.assertTrue(any(command[0] == "dropdb" and "_old_" in str(command[-1]) for command in commands))
+
+    def test_restore_database_owner_failure_cleans_temporary_without_swapping(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dump = root / "database.dump"
+            dump.write_bytes(b"dump")
+            commands = []
+
+            def run(command, **kwargs):
+                commands.append(command)
+                if command[0] == "psql" and "OWNER TO" in str(command[-1]):
+                    raise manager.ManagerError("owner update failed")
+                return mock.Mock(stdout="")
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "SUB2API_STATE_ROOT": str(root / "state"),
+                    "PGDATABASE": "sub2api",
+                    "PGDATABASE_OWNER": "dbowner",
+                },
+                clear=True,
+            ), mock.patch.object(manager, "run", side_effect=run), mock.patch.object(
+                manager,
+                "database_exists",
+                side_effect=[True, True, False],
+            ):
+                with self.assertRaisesRegex(manager.ManagerError, "owner update failed"):
+                    manager.restore_database(dump)
+
+            self.assertFalse(any(command[0] == "psql" and "RENAME TO" in str(command[-1]) for command in commands))
+            self.assertTrue(any(command[0] == "dropdb" and "_rollback_" in str(command[-1]) for command in commands))
+            self.assertFalse((root / "state" / "database-restore.json").exists())
+
+    def test_restore_database_keeps_marker_when_pre_cutover_cleanup_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dump = root / "database.dump"
+            dump.write_bytes(b"dump")
+            state_root = root / "state"
+            state_root.mkdir()
+            state = manager._database_restore_state_for(
+                dump,
+                "sub2api",
+                "sub2api_rollback_1_2",
+                "sub2api_old_1_2",
+            )
+            state["phase"] = "created"
+            manager.write_json_atomic(state_root / "database-restore.json", state)
+
+            def run(command, **kwargs):
+                if command[0] == "dropdb":
+                    raise manager.ManagerError("drop failed")
+                return mock.Mock(stdout="")
+
+            with mock.patch.dict(
+                os.environ,
+                {"SUB2API_STATE_ROOT": str(state_root), "PGDATABASE": "sub2api"},
+                clear=True,
+            ), mock.patch.object(manager, "database_exists", side_effect=[True, True, False]), mock.patch.object(
+                manager, "run", side_effect=run
+            ):
+                with self.assertRaisesRegex(manager.ManagerError, "drop failed"):
+                    manager.restore_database(dump)
+
+            self.assertTrue((state_root / "database-restore.json").exists())
+
+    def test_restore_database_resumes_after_target_was_quarantined(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dump = root / "database.dump"
+            dump.write_bytes(b"dump")
+            state_root = root / "state"
+            state_root.mkdir()
+            state = manager._database_restore_state_for(
+                dump,
+                "sub2api",
+                "sub2api_rollback_1_2",
+                "sub2api_old_1_2",
+            )
+            state["phase"] = "swap_pending"
+            manager.write_json_atomic(state_root / "database-restore.json", state)
+            commands = []
+
+            with mock.patch.dict(
+                os.environ,
+                {"SUB2API_STATE_ROOT": str(state_root), "PGDATABASE": "sub2api"},
+                clear=True,
+            ), mock.patch.object(manager, "database_exists", side_effect=[False, True, True]), mock.patch.object(
+                manager, "run", side_effect=lambda command, **kwargs: commands.append(command) or mock.Mock(stdout="")
+            ):
+                manager.restore_database(dump)
+
+            self.assertFalse(any(command[0] == "createdb" for command in commands))
+            self.assertTrue(any(command[0] == "psql" and 'RENAME TO "sub2api"' in str(command[-1]) for command in commands))
+            self.assertTrue(any(command[0] == "dropdb" and "_old_" in str(command[-1]) for command in commands))
+            self.assertFalse((state_root / "database-restore.json").exists())
+
+    def test_restore_database_keeps_marker_when_quarantine_cleanup_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dump = root / "database.dump"
+            dump.write_bytes(b"dump")
+            state_root = root / "state"
+            state_root.mkdir()
+            state = manager._database_restore_state_for(
+                dump,
+                "sub2api",
+                "sub2api_rollback_1_2",
+                "sub2api_old_1_2",
+            )
+            state["phase"] = "cleanup_pending"
+            manager.write_json_atomic(state_root / "database-restore.json", state)
+
+            def run(command, **kwargs):
+                if command[0] == "dropdb":
+                    raise manager.ManagerError("drop failed")
+                return mock.Mock(stdout="")
+
+            with mock.patch.dict(
+                os.environ,
+                {"SUB2API_STATE_ROOT": str(state_root), "PGDATABASE": "sub2api"},
+                clear=True,
+            ), mock.patch.object(manager, "database_exists", side_effect=[True, False, True]), mock.patch.object(
+                manager, "run", side_effect=run
+            ):
+                with self.assertRaisesRegex(manager.ManagerError, "quarantine database"):
+                    manager.restore_database(dump)
+
+            self.assertTrue((state_root / "database-restore.json").exists())
 
     def test_reconcile_marks_stale_inactive_apply_as_retryable_failure(self):
         with tempfile.TemporaryDirectory() as temporary:

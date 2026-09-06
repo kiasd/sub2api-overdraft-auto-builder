@@ -1357,6 +1357,97 @@ def pg_quote_identifier(value: str, label: str = "database name") -> str:
     return '"' + pg_identifier(value, label).replace('"', '""') + '"'
 
 
+def pg_quote_literal(value: str) -> str:
+    """Quote a PostgreSQL string literal used in an administrative query."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+DATABASE_RESTORE_PHASES = {
+    "creating",
+    "created",
+    "restored",
+    "owner_pending",
+    "ready_to_swap",
+    "sessions_terminated",
+    "quarantine_pending",
+    "target_quarantined",
+    "swap_pending",
+    "target_swapped",
+    "cleanup_pending",
+    "completed",
+}
+
+
+def database_restore_state_path() -> Path:
+    return state_root() / "database-restore.json"
+
+
+def database_exists(name: str, admin: dict[str, str], maintenance_database: str) -> bool:
+    """Check database presence without interpolating an unsafe SQL literal."""
+    result = run(
+        [
+            "psql",
+            "--dbname",
+            maintenance_database,
+            "--tuples-only",
+            "--no-align",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "--command",
+            f"SELECT 1 FROM pg_database WHERE datname = {pg_quote_literal(name)};",
+        ],
+        env=admin,
+        capture=True,
+        timeout=300,
+    )
+    output = str(getattr(result, "stdout", "") or "")
+    return any(line.strip() == "1" for line in output.splitlines())
+
+
+def _write_database_restore_state(state: dict[str, Any]) -> None:
+    state["updated_at"] = now_utc()
+    write_json_atomic(database_restore_state_path(), state)
+
+
+def _clear_database_restore_state() -> None:
+    with contextlib.suppress(FileNotFoundError):
+        database_restore_state_path().unlink()
+
+
+def _database_restore_state_for(
+    dump_path: Path,
+    target: str,
+    temporary: str,
+    quarantine: str,
+) -> dict[str, Any]:
+    return {
+        "schema": 1,
+        "dump_path": str(dump_path.resolve()),
+        "target": target,
+        "temporary": temporary,
+        "quarantine": quarantine,
+        "phase": "creating",
+        "started_at": now_utc(),
+    }
+
+
+def _validate_database_restore_state(
+    state: dict[str, Any], dump_path: Path, target: str
+) -> tuple[str, str, str]:
+    if state.get("schema") != 1:
+        raise ManagerError("database restore state has an unsupported schema")
+    if str(state.get("dump_path", "")) != str(dump_path.resolve()):
+        raise ManagerError("another database restore is pending for a different backup")
+    if str(state.get("target", "")) != target:
+        raise ManagerError("another database restore targets a different database")
+    phase = str(state.get("phase", ""))
+    if phase not in DATABASE_RESTORE_PHASES:
+        raise ManagerError(f"database restore state has an invalid phase: {phase!r}")
+    temporary = pg_identifier(str(state.get("temporary", "")), "temporary database name")
+    quarantine = pg_identifier(str(state.get("quarantine", "")), "quarantine database name")
+    return temporary, quarantine, phase
+
+
 def validate_database_clone(source: Path, dump_path: Path) -> None:
     environment = pg_environment()
     clone = f"{environment['PGDATABASE']}_patchcheck_{int(time.time())}_{os.getpid()}"
@@ -1809,15 +1900,10 @@ def stage_rollback(
     return {"status": "rollback_staged", "version": backup["from_version"], "backup_id": backup["backup_id"]}
 
 
-def restore_database(dump_path: Path) -> None:
-    if not dump_path.is_file():
-        raise ManagerError(f"database backup does not exist: {dump_path}")
+def _database_restore_admin() -> tuple[dict[str, str], dict[str, str], str, str, str]:
+    """Build application and maintenance environments for a DB cutover."""
     environment = pg_environment()
     target = pg_identifier(environment["PGDATABASE"])
-    suffix = f"_rollback_{os.getpid()}_{time.time_ns() % 10**12}"
-    temporary = pg_identifier((target[: 63 - len(suffix)] + suffix).strip("_"))
-    quarantine_suffix = f"_old_{os.getpid()}_{time.time_ns() % 10**12}"
-    quarantine = pg_identifier((target[: 63 - len(quarantine_suffix)] + quarantine_suffix).strip("_"))
     maintenance_database = pg_identifier(os.environ.get("PGMAINTENANCE_DB", "postgres"))
     admin = pg_environment(maintenance_database)
     # An application role often owns its database but is not allowed to create
@@ -1831,8 +1917,229 @@ def restore_database(dump_path: Path) -> None:
     if maintenance_password:
         admin["PGPASSWORD"] = maintenance_password
         admin["DATABASE_PASSWORD"] = maintenance_password
+    application_user = pg_identifier(environment["PGUSER"], "role name")
+    owner = os.environ.get("PGDATABASE_OWNER", "").strip()
+    if owner:
+        owner = pg_identifier(owner, "database owner")
+    return environment, admin, target, maintenance_database, application_user if not owner else owner
+
+
+def _database_restore_psql(
+    admin: dict[str, str], maintenance_database: str, sql: str
+) -> None:
+    run(
+        ["psql", "--dbname", maintenance_database, "-v", "ON_ERROR_STOP=1", "-c", sql],
+        env=admin,
+        timeout=300,
+    )
+
+
+def _database_restore_drop(name: str, admin: dict[str, str]) -> None:
+    run(["dropdb", "--if-exists", "--force", name], env=admin, timeout=300)
+
+
+def _database_restore_rename(
+    source: str,
+    target: str,
+    admin: dict[str, str],
+    maintenance_database: str,
+) -> None:
+    _database_restore_psql(
+        admin,
+        maintenance_database,
+        f"ALTER DATABASE {pg_quote_identifier(source)} RENAME TO {pg_quote_identifier(target)};",
+    )
+
+
+def _database_restore_exists(
+    names: Iterable[str], admin: dict[str, str], maintenance_database: str
+) -> dict[str, bool]:
+    return {
+        name: database_exists(name, admin, maintenance_database)
+        for name in names
+    }
+
+
+def _resume_database_restore(
+    state: dict[str, Any],
+    dump_path: Path,
+    target: str,
+    admin: dict[str, str],
+    maintenance_database: str,
+    *,
+    clear_state: bool,
+) -> bool:
+    """Reconcile a persisted cutover after a process or host interruption.
+
+    Return ``True`` when the persisted operation is complete (including the
+    case where the old database was restored after an interrupted cutover).
+    Return ``False`` when the stale operation can be discarded and a fresh
+    temporary database should be built.
+    """
+    temporary, quarantine, phase = _validate_database_restore_state(state, dump_path, target)
+    exists = _database_restore_exists((target, temporary, quarantine), admin, maintenance_database)
+    target_exists = exists[target]
+    temporary_exists = exists[temporary]
+    quarantine_exists = exists[quarantine]
+
+    # The only valid post-cutover shape is target + quarantine.  The temporary
+    # name must have disappeared when it was renamed to target.
+    if target_exists and quarantine_exists:
+        if temporary_exists:
+            raise ManagerError(
+                "database restore left target, temporary, and quarantine databases; "
+                "refusing an ambiguous cutover"
+            )
+        state["phase"] = "target_swapped"
+        _write_database_restore_state(state)
+        try:
+            _database_restore_drop(quarantine, admin)
+        except Exception as exc:
+            state["phase"] = "cleanup_pending"
+            _write_database_restore_state(state)
+            raise ManagerError(
+                "database cutover completed but the quarantine database could not be removed; "
+                "retry the rollback before starting the service"
+            ) from exc
+        state["phase"] = "completed"
+        _write_database_restore_state(state)
+        if clear_state:
+            _clear_database_restore_state()
+        return True
+
+    # The old target was renamed, but the new database has not yet taken its
+    # name.  Finish that rename, then clean up the old database.
+    if not target_exists and quarantine_exists and temporary_exists:
+        state["phase"] = "swap_pending"
+        _write_database_restore_state(state)
+        _database_restore_rename(temporary, target, admin, maintenance_database)
+        state["phase"] = "target_swapped"
+        _write_database_restore_state(state)
+        try:
+            _database_restore_drop(quarantine, admin)
+        except Exception as exc:
+            state["phase"] = "cleanup_pending"
+            _write_database_restore_state(state)
+            raise ManagerError(
+                "database cutover completed but the quarantine database could not be removed; "
+                "retry the rollback before starting the service"
+            ) from exc
+        state["phase"] = "completed"
+        _write_database_restore_state(state)
+        if clear_state:
+            _clear_database_restore_state()
+        return True
+
+    # If the temporary database was lost after the old target was quarantined,
+    # restoring the quarantine is the only safe outcome.  The caller may retry
+    # the whole rollback afterwards, but the live database is never left absent.
+    if not target_exists and quarantine_exists and not temporary_exists:
+        _database_restore_rename(quarantine, target, admin, maintenance_database)
+        state["phase"] = "completed"
+        _write_database_restore_state(state)
+        if clear_state:
+            _clear_database_restore_state()
+        return True
+
+    # No destructive rename has happened yet.  A stale temporary database can
+    # be discarded and rebuilt; this is safer than trusting a partially
+    # restored dump whose completion marker was never persisted.
+    if target_exists and not quarantine_exists and temporary_exists:
+        _database_restore_drop(temporary, admin)
+        _clear_database_restore_state()
+        return False
+    if target_exists and not quarantine_exists and not temporary_exists and phase in {"creating", "created"}:
+        if clear_state:
+            _clear_database_restore_state()
+        return False
+    if target_exists and not quarantine_exists and not temporary_exists and phase == "completed":
+        if clear_state:
+            _clear_database_restore_state()
+        return True
+
+    raise ManagerError(
+        "database restore state does not describe a safe recoverable layout; "
+        "inspect pg_database for the recorded temporary/quarantine names"
+    )
+
+
+def _abort_database_restore(
+    state: dict[str, Any],
+    dump_path: Path,
+    target: str,
+    admin: dict[str, str],
+    maintenance_database: str,
+) -> None:
+    """Best-effort cleanup while preserving a durable post-cutover marker."""
     try:
-        run(["createdb", temporary], env=admin, timeout=300)
+        temporary, quarantine, _ = _validate_database_restore_state(state, dump_path, target)
+        exists = _database_restore_exists((target, temporary, quarantine), admin, maintenance_database)
+    except Exception:
+        return
+    target_exists = exists[target]
+    temporary_exists = exists[temporary]
+    quarantine_exists = exists[quarantine]
+    if target_exists and not quarantine_exists:
+        if temporary_exists:
+            try:
+                _database_restore_drop(temporary, admin)
+            except Exception:
+                # Keep the marker when cleanup failed so the next startup can
+                # retry the drop instead of losing track of a stray database.
+                return
+        _clear_database_restore_state()
+        return
+    if not target_exists and quarantine_exists:
+        # Before the new database acquired the target name, put the old one
+        # back.  Once target exists, leave the marker for deterministic resume.
+        if temporary_exists:
+            try:
+                _database_restore_drop(temporary, admin)
+            except Exception:
+                return
+        try:
+            _database_restore_rename(quarantine, target, admin, maintenance_database)
+        except Exception:
+            return
+        _clear_database_restore_state()
+
+
+def restore_database(dump_path: Path, *, clear_state: bool = True) -> None:
+    if not dump_path.is_file():
+        raise ManagerError(f"database backup does not exist: {dump_path}")
+    environment, admin, target, maintenance_database, owner = _database_restore_admin()
+    state_path = database_restore_state_path()
+    existing = read_json(state_path, {})
+    if existing:
+        if not isinstance(existing, dict):
+            raise ManagerError("database restore state is not a JSON object")
+        if _resume_database_restore(
+            existing,
+            dump_path,
+            target,
+            admin,
+            maintenance_database,
+            clear_state=clear_state,
+        ):
+            return
+
+    suffix = f"_rollback_{os.getpid()}_{time.time_ns() % 10**12}"
+    temporary = pg_identifier((target[: 63 - len(suffix)] + suffix).strip("_"), "temporary database name")
+    quarantine_suffix = f"_old_{os.getpid()}_{time.time_ns() % 10**12}"
+    quarantine = pg_identifier((target[: 63 - len(quarantine_suffix)] + quarantine_suffix).strip("_"), "quarantine database name")
+    state = _database_restore_state_for(dump_path, target, temporary, quarantine)
+    _write_database_restore_state(state)
+    try:
+        # Make the application role the temporary DB owner.  This keeps
+        # `pg_restore --no-owner` usable even when a separate maintenance role
+        # is needed for the database rename operations.
+        run(
+            ["createdb", "--owner", pg_identifier(environment["PGUSER"], "role name"), temporary],
+            env=admin,
+            timeout=300,
+        )
+        state["phase"] = "created"
+        _write_database_restore_state(state)
         restore_environment = pg_environment(temporary)
         run(
             [
@@ -1847,48 +2154,54 @@ def restore_database(dump_path: Path) -> None:
             env=restore_environment,
             timeout=3600,
         )
-        psql = ["psql", "--dbname", maintenance_database, "-v", "ON_ERROR_STOP=1", "-c"]
-        run(
-            psql + [
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                f"WHERE datname = {target!r} AND pid <> pg_backend_pid();"
-            ],
-            env=admin,
-            timeout=300,
-        )
-        run(
-            psql + [f"ALTER DATABASE {pg_quote_identifier(target)} RENAME TO {pg_quote_identifier(quarantine)};"],
-            env=admin,
-            timeout=300,
-        )
-        try:
-            run(
-                psql + [f"ALTER DATABASE {pg_quote_identifier(temporary)} RENAME TO {pg_quote_identifier(target)};"],
-                env=admin,
-                timeout=300,
+        state["phase"] = "restored"
+        _write_database_restore_state(state)
+        application_owner = pg_identifier(environment["PGUSER"], "role name")
+        if owner != application_owner:
+            state["phase"] = "owner_pending"
+            _write_database_restore_state(state)
+            _database_restore_psql(
+                admin,
+                maintenance_database,
+                f"ALTER DATABASE {pg_quote_identifier(temporary)} OWNER TO {pg_quote_identifier(owner, 'database owner')};",
             )
-            owner = os.environ.get("PGDATABASE_OWNER", "").strip()
-            if owner:
-                run(
-                    psql + [f"ALTER DATABASE {pg_quote_identifier(target)} OWNER TO {pg_quote_identifier(owner, 'database owner')};"],
-                    env=admin,
-                    timeout=300,
-                )
-            # The old database is disposable; cleanup failure must not undo a
-            # successful cutover or make a retry restore over the live target.
-            with contextlib.suppress(Exception):
-                run(["dropdb", "--if-exists", "--force", quarantine], env=admin, timeout=300)
-        except Exception:
-            with contextlib.suppress(Exception):
-                run(
-                    psql + [f"ALTER DATABASE {pg_quote_identifier(quarantine)} RENAME TO {pg_quote_identifier(target)};"],
-                    env=admin,
-                    timeout=300,
-                )
-            raise
+        state["phase"] = "ready_to_swap"
+        _write_database_restore_state(state)
+        _database_restore_psql(
+            admin,
+            maintenance_database,
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname = {pg_quote_literal(target)} AND pid <> pg_backend_pid();",
+        )
+        state["phase"] = "sessions_terminated"
+        _write_database_restore_state(state)
+        state["phase"] = "quarantine_pending"
+        _write_database_restore_state(state)
+        _database_restore_rename(target, quarantine, admin, maintenance_database)
+        state["phase"] = "target_quarantined"
+        _write_database_restore_state(state)
+        state["phase"] = "swap_pending"
+        _write_database_restore_state(state)
+        _database_restore_rename(temporary, target, admin, maintenance_database)
+        state["phase"] = "target_swapped"
+        _write_database_restore_state(state)
+        state["phase"] = "cleanup_pending"
+        _write_database_restore_state(state)
+        try:
+            _database_restore_drop(quarantine, admin)
+        except Exception as exc:
+            # The new target is valid; retain the marker so a retry only
+            # performs cleanup and never restores the dump a second time.
+            raise ManagerError(
+                "database cutover completed but the quarantine database could not be removed; "
+                "retry the rollback before starting the service"
+            ) from exc
+        state["phase"] = "completed"
+        _write_database_restore_state(state)
+        if clear_state:
+            _clear_database_restore_state()
     except Exception:
-        with contextlib.suppress(Exception):
-            run(["dropdb", "--if-exists", "--force", temporary], env=admin, timeout=300)
+        _abort_database_restore(state, dump_path, target, admin, maintenance_database)
         raise
 
 
@@ -1907,9 +2220,14 @@ def apply_pending() -> dict[str, Any]:
         if expected_hash and sha256_file(backup_binary) != expected_hash:
             raise ManagerError(f"rollback binary checksum mismatch: {backup_binary}")
     if pending.get("phase") not in {"database_swapped", "binary_restored_after_database"}:
-        restore_database(Path(str(pending["database_dump"])))
+        # Keep the database cutover marker until this pending transaction is
+        # durably advanced.  A crash in the small window between the DB rename
+        # and this JSON write must resume from the physical DB layout rather
+        # than importing the dump a second time.
+        restore_database(Path(str(pending["database_dump"])), clear_state=False)
         pending["phase"] = "database_swapped"
         write_json_atomic(pending_path, pending)
+        _clear_database_restore_state()
     if backup_binary is not None:
         atomic_replace_binary(backup_binary)
         pending["phase"] = "binary_restored_after_database"
