@@ -36,7 +36,7 @@
 - [auto-build.yml](.github/workflows/auto-build.yml) 每 4 小时检测一次，也支持手动强制构建。
 - [validate.yml](.github/workflows/validate.yml) 校验 Python、UI 清单、密钥泄露和单元测试。
 - 官方 `v0.2.1` 与 HTExplicit 的合并基线一致时，重放锁定的 codexrip 变更。
-- 当前 `v0.2.1-codexrip.3` 重放明确排除 HTExplicit 临时的
+- 当前 `v0.2.1-codexrip.4` 重放明确排除 HTExplicit 临时的
   `.github/workflows/ssh-deploy-key-probe.yml`；该工作流会读取生产环境 SSH
   密钥并连接目标主机，不属于本自用包。排除项会写入 `build-metadata.json`，检测器
   也会拒绝包含该路径的补丁。
