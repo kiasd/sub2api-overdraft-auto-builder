@@ -108,6 +108,33 @@
         "sha256": "fef2546e2017904107327636c27ba04c5a40be22e3eb94c6a376a961feba1581"
       },
       "overdraft_revision": 6
+    },
+    {
+      "id": "codexrip-0.2.3.7",
+      "target": {
+        "repository": "Wei-Shaw/sub2api",
+        "version": "0.2.3",
+        "commit": "8fa67d477d6651a744754392a8982ea589c26ae6"
+      },
+      "source": {
+        "repository": "kiasd/sub2api-overdraft-auto-builder",
+        "branch": "fusion-proof-v0.2.3-codexrip.7",
+        "version": "0.2.3-codexrip.7",
+        "commit": "e57ed4094e26428d5a36a722cea9fc22e201940e",
+        "base_version": "0.2.3",
+        "base_commit": "8fa67d477d6651a744754392a8982ea589c26ae6",
+        "feature_diff_sha256": "075745939ae9cec7583d9ad4a76d7e548f50e853d2d08cd9df547a16ca564426",
+        "excluded_paths": [
+          ".github/workflows/production-deploy.yml",
+          ".github/workflows/ssh-deploy-key-probe.yml",
+          ".github/workflows/upstream-auto-deploy.yml"
+        ]
+      },
+      "patch": {
+        "path": "payload/fork-replays/v0.2.3-codexrip.7.patch",
+        "sha256": "075745939ae9cec7583d9ad4a76d7e548f50e853d2d08cd9df547a16ca564426"
+      },
+      "overdraft_revision": 7
     }
   ]
 }
