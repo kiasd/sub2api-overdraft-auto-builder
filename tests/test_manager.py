@@ -260,6 +260,22 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(exclusions, ["src/components/account/__tests__/CreateAccountModal.grok.spec.ts"])
             self.assertEqual(command[-2:], ["--exclude", exclusions[0]])
 
+    def test_frontend_test_command_excludes_v024_provider_count_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            frontend = Path(temporary)
+            test_path = frontend / "src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts"
+            catalog = frontend / "src/constants/channelMonitor.ts"
+            test_path.parent.mkdir(parents=True)
+            catalog.parent.mkdir(parents=True, exist_ok=True)
+            test_path.write_text(
+                "expect(providerButtons).toHaveLength(8)", encoding="utf-8"
+            )
+            catalog.write_text("export const PROVIDER_MINIMAX = 'minimax'", encoding="utf-8")
+            command, exclusions = manager.frontend_test_command("pnpm", frontend)
+            expected = "src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts"
+            self.assertEqual(exclusions, [expected])
+            self.assertEqual(command[-2:], ["--exclude", expected])
+
     def test_go_toolchain_uses_the_immutable_source_requirement(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)

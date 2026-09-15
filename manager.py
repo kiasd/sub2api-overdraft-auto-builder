@@ -893,7 +893,7 @@ def apply_ui_overlay(source: Path, version: str) -> dict[str, str]:
 
 
 def frontend_test_command(pnpm: str, frontend: Path) -> tuple[list[str], list[str]]:
-    """Keep full tests strict while documenting one known upstream assertion mismatch."""
+    """Keep full tests strict while documenting known upstream assertion mismatches."""
     command = [pnpm, "run", "test:run"]
     exclusions: list[str] = []
     stale_test = frontend / "src" / "components" / "account" / "__tests__" / "CreateAccountModal.grok.spec.ts"
@@ -905,8 +905,24 @@ def frontend_test_command(pnpm: str, frontend: Path) -> tuple[list[str], list[st
         if expected_expression in test_text and expected_expression not in implementation_text:
             relative = stale_test.relative_to(frontend).as_posix()
             exclusions.append(relative)
-            command = [pnpm, "exec", "vitest", "run", "--exclude", relative]
             log(f"excluding known upstream baseline assertion mismatch: {relative}")
+    # v0.2.4 adds Kimi, Zhipu, DeepSeek, and MiniMax to the monitor provider
+    # catalog, but its Grok regression still asserts the old eight-button
+    # count. Exclude only when both the stale assertion and the new catalog are
+    # present; a changed upstream test then fails closed as usual.
+    provider_test = frontend / "src" / "views" / "admin" / "__tests__" / "ChannelMonitorView.grok.spec.ts"
+    provider_catalog = frontend / "src" / "constants" / "channelMonitor.ts"
+    if provider_test.is_file() and provider_catalog.is_file():
+        test_text = provider_test.read_text(encoding="utf-8")
+        catalog_text = provider_catalog.read_text(encoding="utf-8")
+        if "expect(providerButtons).toHaveLength(8)" in test_text and "PROVIDER_MINIMAX" in catalog_text:
+            relative = provider_test.relative_to(frontend).as_posix()
+            exclusions.append(relative)
+            log(f"excluding known upstream provider-count assertion mismatch: {relative}")
+    if exclusions:
+        command = [pnpm, "exec", "vitest", "run"]
+        for relative in exclusions:
+            command.extend(["--exclude", relative])
     return command, exclusions
 
 
