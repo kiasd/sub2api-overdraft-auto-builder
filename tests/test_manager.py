@@ -260,21 +260,52 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(exclusions, ["src/components/account/__tests__/CreateAccountModal.grok.spec.ts"])
             self.assertEqual(command[-2:], ["--exclude", exclusions[0]])
 
-    def test_frontend_test_command_excludes_v024_provider_count_mismatch(self):
+    def test_correct_known_v024_provider_count_assertion(self):
         with tempfile.TemporaryDirectory() as temporary:
             frontend = Path(temporary)
             test_path = frontend / "src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts"
-            catalog = frontend / "src/constants/channelMonitor.ts"
             test_path.parent.mkdir(parents=True)
-            catalog.parent.mkdir(parents=True, exist_ok=True)
-            test_path.write_text(
-                "expect(providerButtons).toHaveLength(8)", encoding="utf-8"
+            test_path.write_bytes(
+                b"it('provider count', () => { expect(providerButtons).toHaveLength(8) })\n"
             )
-            catalog.write_text("export const PROVIDER_MINIMAX = 'minimax'", encoding="utf-8")
-            command, exclusions = manager.frontend_test_command("pnpm", frontend)
-            expected = "src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts"
-            self.assertEqual(exclusions, [expected])
-            self.assertEqual(command[-2:], ["--exclude", expected])
+            with mock.patch.object(
+                manager,
+                "V024_CHANNEL_MONITOR_GROK_TEST_SHA256",
+                manager.sha256_file(test_path),
+            ):
+                corrections = manager.correct_known_frontend_test_assertions(
+                    frontend, "0.2.4-codexrip.8"
+                )
+            self.assertEqual(
+                corrections,
+                [
+                    "src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts: "
+                    "provider count 8 -> 9"
+                ],
+            )
+            self.assertIn("toHaveLength(9)", test_path.read_text(encoding="utf-8"))
+
+    def test_known_v024_provider_count_correction_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            frontend = Path(temporary)
+            test_path = frontend / "src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts"
+            test_path.parent.mkdir(parents=True)
+            original = b"expect(providerButtons).toHaveLength(8)"
+            test_path.write_bytes(original)
+            with mock.patch.object(
+                manager,
+                "V024_CHANNEL_MONITOR_GROK_TEST_SHA256",
+                manager.sha256_file(test_path),
+            ):
+                self.assertEqual(
+                    manager.correct_known_frontend_test_assertions(frontend, "0.2.5-codexrip.9"),
+                    [],
+                )
+                test_path.write_bytes(original + b"\nchanged")
+                self.assertEqual(
+                    manager.correct_known_frontend_test_assertions(frontend, "0.2.4-codexrip.8"),
+                    [],
+                )
 
     def test_go_toolchain_uses_the_immutable_source_requirement(self):
         with tempfile.TemporaryDirectory() as temporary:

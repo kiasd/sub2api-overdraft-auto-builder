@@ -80,6 +80,11 @@ PATCH_BASE_COMMITS = {
     "0.1.177": "baeac1f3de21d37b129405f092ef86c24b3f203d",
     "0.1.178": "e0c48a19ed794a565e3858662520afe0a1f9f0ba",
 }
+V024_CHANNEL_MONITOR_GROK_TEST_SHA256 = (
+    "e88e8a7f8aa39cc96e885b07bd438f1dcd85635ac5b9a4ba3909332579873be5"
+)
+V024_STALE_PROVIDER_ASSERTION = b"expect(providerButtons).toHaveLength(8)"
+V024_FIXED_PROVIDER_ASSERTION = b"expect(providerButtons).toHaveLength(9)"
 
 
 class ManagerError(RuntimeError):
@@ -892,6 +897,27 @@ def apply_ui_overlay(source: Path, version: str) -> dict[str, str]:
     }
 
 
+def correct_known_frontend_test_assertions(frontend: Path, version: str) -> list[str]:
+    """Correct one immutable upstream test typo without suppressing its other cases."""
+    if normalize_version(version) != "0.2.4-codexrip.8":
+        return []
+
+    test_path = frontend / "src" / "views" / "admin" / "__tests__" / "ChannelMonitorView.grok.spec.ts"
+    if not test_path.is_file() or sha256_file(test_path) != V024_CHANNEL_MONITOR_GROK_TEST_SHA256:
+        return []
+
+    test_bytes = test_path.read_bytes()
+    if test_bytes.count(V024_STALE_PROVIDER_ASSERTION) != 1:
+        raise ManagerError("v0.2.4 Grok provider test no longer has the expected stale assertion")
+    test_path.write_bytes(
+        test_bytes.replace(V024_STALE_PROVIDER_ASSERTION, V024_FIXED_PROVIDER_ASSERTION)
+    )
+    relative = test_path.relative_to(frontend).as_posix()
+    correction = f"{relative}: provider count 8 -> 9"
+    log(f"correcting known v0.2.4 upstream test assertion: {correction}")
+    return [correction]
+
+
 def frontend_test_command(pnpm: str, frontend: Path) -> tuple[list[str], list[str]]:
     """Keep full tests strict while documenting known upstream assertion mismatches."""
     command = [pnpm, "run", "test:run"]
@@ -906,19 +932,6 @@ def frontend_test_command(pnpm: str, frontend: Path) -> tuple[list[str], list[st
             relative = stale_test.relative_to(frontend).as_posix()
             exclusions.append(relative)
             log(f"excluding known upstream baseline assertion mismatch: {relative}")
-    # v0.2.4 adds Kimi, Zhipu, DeepSeek, and MiniMax to the monitor provider
-    # catalog, but its Grok regression still asserts the old eight-button
-    # count. Exclude only when both the stale assertion and the new catalog are
-    # present; a changed upstream test then fails closed as usual.
-    provider_test = frontend / "src" / "views" / "admin" / "__tests__" / "ChannelMonitorView.grok.spec.ts"
-    provider_catalog = frontend / "src" / "constants" / "channelMonitor.ts"
-    if provider_test.is_file() and provider_catalog.is_file():
-        test_text = provider_test.read_text(encoding="utf-8")
-        catalog_text = provider_catalog.read_text(encoding="utf-8")
-        if "expect(providerButtons).toHaveLength(8)" in test_text and "PROVIDER_MINIMAX" in catalog_text:
-            relative = provider_test.relative_to(frontend).as_posix()
-            exclusions.append(relative)
-            log(f"excluding known upstream provider-count assertion mismatch: {relative}")
     if exclusions:
         command = [pnpm, "exec", "vitest", "run"]
         for relative in exclusions:
@@ -1202,7 +1215,9 @@ def build_and_test(
     run([pnpm, "run", "typecheck"], cwd=frontend, env=environment, timeout=1800)
     report(32, "前端测试")
     frontend_test_exclusions: list[str] = []
+    frontend_test_corrections: list[str] = []
     if os.environ.get("SUB2API_FULL_FRONTEND_TESTS", "1") == "1":
+        frontend_test_corrections = correct_known_frontend_test_assertions(frontend, version)
         test_command, frontend_test_exclusions = frontend_test_command(pnpm, frontend)
         run(test_command, cwd=frontend, env=environment, timeout=3600)
     else:
@@ -1302,6 +1317,7 @@ def build_and_test(
         "tests": "passed",
         "core_unit_tests": f"{channel} suite passed",
         "frontend_test_exclusions": frontend_test_exclusions,
+        "frontend_test_corrections": frontend_test_corrections,
         "go_toolchain": go_toolchain,
         "duration_seconds": round(time.monotonic() - started, 3),
     }
