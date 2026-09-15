@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "kind": "resolved-replay-proof",
+  "version": "0.2.4-codexrip.8",
+  "official": {
+    "repository": "Wei-Shaw/sub2api",
+    "version": "0.2.4",
+    "commit": "5de5e2bed035d43591a2e10e51f420ef6a84eb98"
+  },
+  "full_source_patch_sha256": "f2b6aad26ce4d73f0eaf521ec7ecb5ddc9423adbfae395f0f8dbfacbdb61a0c6",
+  "resolved_replay_patch_sha256": "aaee5a0e52e2fa1eeb29a0210971dd6f12278fdebcb927d419a43643e59b537e"
+}
