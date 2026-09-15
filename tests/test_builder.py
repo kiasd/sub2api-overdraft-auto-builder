@@ -261,60 +261,82 @@ class BuilderTests(unittest.TestCase):
             detect_updates.sha256_file(replay6_path), replay6["patch"]["sha256"]
         )
 
-        replay7 = next(
+        replay8 = next(
             entry
             for entry in replay_manifest["replays"]
-            if entry["id"] == "codexrip-0.2.3.7"
+            if entry["id"] == "codexrip-0.2.4.8"
         )
         self.assertEqual(
-            replay7["target"],
+            replay8["target"],
             {
                 "repository": "Wei-Shaw/sub2api",
-                "version": "0.2.3",
-                "commit": "8fa67d477d6651a744754392a8982ea589c26ae6",
+                "version": "0.2.4",
+                "commit": "5de5e2bed035d43591a2e10e51f420ef6a84eb98",
             },
         )
         self.assertEqual(
-            replay7["source"]["repository"], "kiasd/sub2api-overdraft-auto-builder"
+            replay8["source"]["repository"], "kiasd/sub2api-overdraft-auto-builder"
         )
         self.assertEqual(
-            replay7["source"]["branch"], "fusion-proof-v0.2.3-codexrip.7"
+            replay8["source"]["branch"], "fusion-proof-v0.2.4-codexrip.8"
         )
-        self.assertEqual(replay7["source"]["version"], "0.2.3-codexrip.7")
+        self.assertEqual(replay8["source"]["version"], "0.2.4-codexrip.8")
         self.assertEqual(
-            replay7["source"]["commit"], "e57ed4094e26428d5a36a722cea9fc22e201940e"
+            replay8["source"]["commit"], "291741aac42539e7616bef4c7dcd052424ddeebf"
         )
-        self.assertEqual(replay7["source"]["base_version"], "0.2.3")
+        self.assertEqual(replay8["source"]["base_version"], "0.2.4")
         self.assertEqual(
-            replay7["source"]["base_commit"], "8fa67d477d6651a744754392a8982ea589c26ae6"
+            replay8["source"]["base_commit"], "5de5e2bed035d43591a2e10e51f420ef6a84eb98"
         )
-        self.assertEqual(replay7["overdraft_revision"], 7)
-        replay7_path = root / replay7["patch"]["path"]
+        self.assertEqual(replay8["overdraft_revision"], 8)
+        replay8_path = root / replay8["patch"]["path"]
         self.assertEqual(
-            detect_updates.sha256_file(replay7_path), replay7["patch"]["sha256"]
-        )
-        self.assertEqual(
-            replay7["source"]["feature_diff_sha256"], replay7["patch"]["sha256"]
+            detect_updates.sha256_file(replay8_path), replay8["patch"]["sha256"]
         )
         self.assertEqual(
-            detect_updates.FORK_BRANCH, "fusion-proof-v0.2.3-codexrip.7"
+            replay8["source"]["feature_diff_sha256"], replay8["patch"]["sha256"]
+        )
+        self.assertEqual(
+            detect_updates.FORK_BRANCH, "fusion-proof-v0.2.4-codexrip.8"
         )
 
-        overlay023 = json.loads(
-            (root / "payload" / "ui" / "0.2.3" / "manifest.json").read_text(
+        overlay024 = json.loads(
+            (root / "payload" / "ui" / "0.2.4" / "manifest.json").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertEqual(overlay023["target_version"], "0.2.3")
-        sidebar023 = next(
+        self.assertEqual(overlay024["target_version"], "0.2.4")
+        sidebar024 = next(
             entry
-            for entry in overlay023["files"]
+            for entry in overlay024["files"]
             if entry["path"] == "frontend/src/components/layout/AppSidebar.vue"
         )
         self.assertEqual(
-            sidebar023["source_sha256"],
+            sidebar024["source_sha256"],
             "9d444432756945345ef73ff50dbdd33886c09043520b517045e7ee1698c470ee",
         )
+        user_stats024 = next(
+            entry
+            for entry in overlay024["files"]
+            if entry["path"] == "frontend/src/components/user/dashboard/UserDashboardStats.vue"
+        )
+        self.assertEqual(
+            user_stats024["source_sha256"],
+            "74aa3caaf71d1643f47a12298bfc336215b63acbe0c04157c5b702dc4e768f37",
+        )
+        user_stats_source = (
+            root
+            / "payload"
+            / "ui"
+            / "0.2.4"
+            / "frontend"
+            / "src"
+            / "components"
+            / "user"
+            / "dashboard"
+            / "UserDashboardStats.vue"
+        ).read_text(encoding="utf-8")
+        self.assertIn("minimax: 'MiniMax'", user_stats_source)
 
     def test_overlay_source_state_rejects_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
