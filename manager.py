@@ -85,6 +85,11 @@ V024_CHANNEL_MONITOR_GROK_TEST_SHA256 = (
 )
 V024_STALE_PROVIDER_ASSERTION = b"expect(providerButtons).toHaveLength(8)"
 V024_FIXED_PROVIDER_ASSERTION = b"expect(providerButtons).toHaveLength(9)"
+V025_CHANNEL_MONITOR_GROK_TEST_SHA256 = (
+    "e88e8a7f8aa39cc96e885b07bd438f1dcd85635ac5b9a4ba3909332579873be5"
+)
+V025_STALE_PROVIDER_ASSERTION = b"expect(providerButtons).toHaveLength(8)"
+V025_FIXED_PROVIDER_ASSERTION = b"expect(providerButtons).toHaveLength(10)"
 
 
 class ManagerError(RuntimeError):
@@ -899,22 +904,39 @@ def apply_ui_overlay(source: Path, version: str) -> dict[str, str]:
 
 def correct_known_frontend_test_assertions(frontend: Path, version: str) -> list[str]:
     """Correct one immutable upstream test typo without suppressing its other cases."""
-    if normalize_version(version) != "0.2.4-codexrip.8":
+    normalized_version = normalize_version(version)
+    corrections = {
+        "0.2.4-codexrip.8": (
+            V024_CHANNEL_MONITOR_GROK_TEST_SHA256,
+            V024_STALE_PROVIDER_ASSERTION,
+            V024_FIXED_PROVIDER_ASSERTION,
+            "8 -> 9",
+        ),
+        "0.2.5-codexrip.8": (
+            V025_CHANNEL_MONITOR_GROK_TEST_SHA256,
+            V025_STALE_PROVIDER_ASSERTION,
+            V025_FIXED_PROVIDER_ASSERTION,
+            "8 -> 10",
+        ),
+    }
+    correction_spec = corrections.get(normalized_version)
+    if correction_spec is None:
         return []
+    expected_hash, stale_assertion, fixed_assertion, count_change = correction_spec
 
     test_path = frontend / "src" / "views" / "admin" / "__tests__" / "ChannelMonitorView.grok.spec.ts"
-    if not test_path.is_file() or sha256_file(test_path) != V024_CHANNEL_MONITOR_GROK_TEST_SHA256:
+    if not test_path.is_file() or sha256_file(test_path) != expected_hash:
         return []
 
     test_bytes = test_path.read_bytes()
-    if test_bytes.count(V024_STALE_PROVIDER_ASSERTION) != 1:
-        raise ManagerError("v0.2.4 Grok provider test no longer has the expected stale assertion")
-    test_path.write_bytes(
-        test_bytes.replace(V024_STALE_PROVIDER_ASSERTION, V024_FIXED_PROVIDER_ASSERTION)
-    )
+    if test_bytes.count(stale_assertion) != 1:
+        raise ManagerError(
+            f"v{normalized_version} Grok provider test no longer has the expected stale assertion"
+        )
+    test_path.write_bytes(test_bytes.replace(stale_assertion, fixed_assertion))
     relative = test_path.relative_to(frontend).as_posix()
-    correction = f"{relative}: provider count 8 -> 9"
-    log(f"correcting known v0.2.4 upstream test assertion: {correction}")
+    correction = f"{relative}: provider count {count_change}"
+    log(f"correcting known v{normalized_version} upstream test assertion: {correction}")
     return [correction]
 
 

@@ -285,6 +285,31 @@ class ManagerTests(unittest.TestCase):
             )
             self.assertIn("toHaveLength(9)", test_path.read_text(encoding="utf-8"))
 
+    def test_correct_known_v025_provider_count_assertion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            frontend = Path(temporary)
+            test_path = frontend / "src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts"
+            test_path.parent.mkdir(parents=True)
+            test_path.write_bytes(
+                b"it('provider count', () => { expect(providerButtons).toHaveLength(8) })\n"
+            )
+            with mock.patch.object(
+                manager,
+                "V025_CHANNEL_MONITOR_GROK_TEST_SHA256",
+                manager.sha256_file(test_path),
+            ):
+                corrections = manager.correct_known_frontend_test_assertions(
+                    frontend, "0.2.5-codexrip.8"
+                )
+            self.assertEqual(
+                corrections,
+                [
+                    "src/views/admin/__tests__/ChannelMonitorView.grok.spec.ts: "
+                    "provider count 8 -> 10"
+                ],
+            )
+            self.assertIn("toHaveLength(10)", test_path.read_text(encoding="utf-8"))
+
     def test_known_v024_provider_count_correction_fails_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
             frontend = Path(temporary)
