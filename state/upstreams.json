@@ -1,6 +1,6 @@
 {
   "last_success": {
-    "fingerprint": "a126b933eaeaeb63609d78bc53f3bac2616edbdc2c406e9bc4aa7e547cda0c5a",
+    "fingerprint": "75b8586a1e000f784cad4103d1b01d64cc879b6d1240db3265c41bcc4ff90268",
     "fork": {
       "base_commit": "5de5e2bed035d43591a2e10e51f420ef6a84eb98",
       "base_version": "0.2.4",
@@ -12,32 +12,32 @@
       "version": "0.2.4-codexrip.8"
     },
     "official": {
-      "commit": "86f93c28ee34cc74b629dafb748bd5ac5ca8c5ea",
-      "published_at": "2026-09-15T09:02:34Z",
+      "commit": "aea725f2ea644d5592d0bbb1d63b607efa7e200a",
+      "published_at": "2026-09-19T04:28:46Z",
       "repository": "Wei-Shaw/sub2api",
-      "tag": "v0.2.5",
-      "url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.2.5",
-      "version": "0.2.5"
+      "tag": "v0.2.7",
+      "url": "https://github.com/Wei-Shaw/sub2api/releases/tag/v0.2.7",
+      "version": "0.2.7"
     },
     "overlay": {
       "available": true,
-      "manifest_sha256": "224f3d94c009ba4788378b38e8335229cc101acaac38b03bb5de5c3d0c9d769a",
+      "manifest_sha256": "5b9ba33a554988516ed52e310cec4e83587d34d343b397603bc0123bfafe1573",
       "mode": "exact",
-      "source_version": "0.2.5",
-      "target_version": "0.2.5"
+      "source_version": "0.2.7",
+      "target_version": "0.2.7"
     },
-    "published_at": "2026-09-17T01:52:19+00:00",
-    "release_tag": "fusion-v0.2.5-codexrip.8-86f93c28-291741aa-u2e1de260",
-    "release_version": "0.2.5-codexrip.8",
+    "published_at": "2026-09-20T08:27:00+00:00",
+    "release_tag": "fusion-v0.2.7-codexrip.8-aea725f2-291741aa-u56f1163d",
+    "release_version": "0.2.7-codexrip.8",
     "replay": {
-      "entry_sha256": "35bf47143e2ce1ea95b0782819acbf50107f47bdc16f8e8ce27f05a892ae4fba",
-      "id": "codexrip-0.2.5.8",
-      "manifest_sha256": "f31684d7d22b08a26bc983dfef50e723d4d62db72a7028a8b6ad6fcdca40e761",
+      "entry_sha256": "ceedb96ce733894e1efcfff4c27683919b3aaae2590fcd13e57db7d7bf0000a9",
+      "id": "codexrip-0.2.7.8",
+      "manifest_sha256": "55a466c0754bddff203e9a95fdbbe22f54eb6a8564475c645d346c783f8fb5f8",
       "mode": "approved-resolved-patch",
       "overdraft_revision": 8,
       "patch": {
-        "path": "payload/fork-replays/v0.2.5-codexrip.8.patch",
-        "sha256": "0ead2697ca97292b9ccaf896051c9b7833ce2611726720ef67c436d621f7108d"
+        "path": "payload/fork-replays/v0.2.7-codexrip.8.patch",
+        "sha256": "19200fb361144e41b76ee66d6388e7abd4b7a9d423db077f8666fb4ba1735c86"
       },
       "source": {
         "base_commit": "5de5e2bed035d43591a2e10e51f420ef6a84eb98",
@@ -54,12 +54,12 @@
         "version": "0.2.4-codexrip.8"
       },
       "target": {
-        "commit": "86f93c28ee34cc74b629dafb748bd5ac5ca8c5ea",
+        "commit": "aea725f2ea644d5592d0bbb1d63b607efa7e200a",
         "repository": "Wei-Shaw/sub2api",
-        "version": "0.2.5"
+        "version": "0.2.7"
       }
     },
-    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/35171835249"
+    "run_url": "https://github.com/kiasd/sub2api-overdraft-auto-builder/actions/runs/35499151493"
   },
   "schema": 1
 }
