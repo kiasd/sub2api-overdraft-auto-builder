@@ -338,6 +338,50 @@ class BuilderTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("minimax: 'MiniMax'", user_stats_source)
 
+        replay027 = next(
+            entry
+            for entry in replay_manifest["replays"]
+            if entry["id"] == "codexrip-0.2.7.8"
+        )
+        self.assertEqual(
+            replay027["target"],
+            {
+                "repository": "Wei-Shaw/sub2api",
+                "version": "0.2.7",
+                "commit": "aea725f2ea644d5592d0bbb1d63b607efa7e200a",
+            },
+        )
+        self.assertEqual(replay027["source"], replay8["source"])
+        self.assertEqual(replay027["overdraft_revision"], 8)
+        replay027_path = root / replay027["patch"]["path"]
+        self.assertEqual(
+            detect_updates.sha256_file(replay027_path), replay027["patch"]["sha256"]
+        )
+
+        overlay027 = json.loads(
+            (root / "payload" / "ui" / "0.2.7" / "manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(overlay027["target_version"], "0.2.7")
+        header027 = next(
+            entry
+            for entry in overlay027["files"]
+            if entry["path"] == "frontend/src/components/layout/AppHeader.vue"
+        )
+        self.assertEqual(
+            header027["source_sha256"],
+            "dae3b56b2e85c3ab47f66766dba991cb3a517215f53a7bbdbc712c78af53b763",
+        )
+        header027_path = root / "payload" / "ui" / "0.2.7" / header027["path"]
+        self.assertEqual(
+            detect_updates.sha256_file(header027_path), header027["sha256"]
+        )
+        header027_source = header027_path.read_text(encoding="utf-8")
+        self.assertIn(':title="t(\'nav.modelPlaza\')"', header027_source)
+        self.assertIn(':aria-label="t(\'nav.modelPlaza\')"', header027_source)
+        self.assertIn('class="anime-header-tool flex ', header027_source)
+
     def test_overlay_source_state_rejects_drift(self):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "frontend" / "source.ts"
